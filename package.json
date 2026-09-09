@@ -1,0 +1,12 @@
+{
+  "name": "deepshrink",
+  "version": "1.0.0",
+  "description": "DeepSkrin — content-addressable context store, recall tool, and compaction guard for Command Code",
+  "type": "module",
+  "private": true,
+  "commandcode": {
+    "mods": [
+      "./entry/index.ts"
+    ]
+  }
+}

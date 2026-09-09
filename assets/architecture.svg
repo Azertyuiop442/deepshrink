@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" font-family="'Geist Mono','SF Mono',Menlo,monospace">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#878580"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#24837B"/>
+    </marker>
+    <marker id="arrow-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#DA702C"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="#141312"/>
+
+  <text x="800" y="70" fill="#CECDC3" font-size="26" font-weight="600" letter-spacing="0.02em" text-anchor="middle">DeepSkrin &#8212; architecture</text>
+  <text x="800" y="98" fill="#878580" font-size="13" text-anchor="middle">tool outputs are cached once, re-served with proof, compressed without loss</text>
+
+  <g>
+    <rect x="40" y="170" width="360" height="600" rx="8" fill="rgba(206,205,195,0.02)" stroke="rgba(206,205,195,0.10)" stroke-width="0.8"/>
+    <rect x="150" y="174" width="140" height="12" rx="2" fill="#141312"/>
+    <text x="220" y="184" fill="rgba(206,205,195,0.40)" font-size="10" text-anchor="middle" letter-spacing="0.14em">AGENT RUNTIME</text>
+
+    <rect x="80" y="330" width="280" height="110" rx="8" fill="#1C1B1A" stroke="rgba(206,205,195,0.18)" stroke-width="1.2"/>
+    <text x="220" y="375" fill="#CECDC3" font-size="16" text-anchor="middle">coding agent</text>
+    <text x="220" y="400" fill="#878580" font-size="11" text-anchor="middle">any host, any model</text>
+
+    <rect x="80" y="580" width="280" height="110" rx="8" fill="#1C1B1A" stroke="rgba(206,205,195,0.18)" stroke-width="1.2"/>
+    <text x="220" y="625" fill="#CECDC3" font-size="16" text-anchor="middle">deepshrink_recall</text>
+    <text x="220" y="650" fill="#878580" font-size="11" text-anchor="middle">explicit query tool</text>
+  </g>
+
+  <g>
+    <rect x="480" y="170" width="420" height="600" rx="8" fill="rgba(206,205,195,0.02)" stroke="rgba(206,205,195,0.10)" stroke-width="0.8"/>
+    <rect x="590" y="174" width="200" height="12" rx="2" fill="#141312"/>
+    <text x="690" y="184" fill="rgba(206,205,195,0.40)" font-size="10" text-anchor="middle" letter-spacing="0.14em">HOOKS</text>
+
+    <rect x="520" y="240" width="340" height="100" rx="8" fill="#1C1B1A" stroke="rgba(206,205,195,0.18)" stroke-width="1.2"/>
+    <text x="690" y="282" fill="#CECDC3" font-size="16" text-anchor="middle">beforeToolCall</text>
+    <text x="690" y="307" fill="#878580" font-size="11" text-anchor="middle">elision gate &#8212; serve or let run</text>
+
+    <rect x="520" y="430" width="340" height="100" rx="8" fill="#1C1B1A" stroke="rgba(206,205,195,0.18)" stroke-width="1.2"/>
+    <text x="690" y="472" fill="#CECDC3" font-size="16" text-anchor="middle">afterToolCall</text>
+    <text x="690" y="497" fill="#878580" font-size="11" text-anchor="middle">ingest + compress + meter</text>
+
+    <rect x="520" y="620" width="340" height="100" rx="8" fill="#1C1B1A" stroke="rgba(206,205,195,0.18)" stroke-width="1.2"/>
+    <text x="690" y="662" fill="#CECDC3" font-size="16" text-anchor="middle">transformContext</text>
+    <text x="690" y="687" fill="#878580" font-size="11" text-anchor="middle">context view + compaction guard</text>
+  </g>
+
+  <g>
+    <rect x="1040" y="170" width="520" height="600" rx="8" fill="rgba(206,205,195,0.02)" stroke="rgba(206,205,195,0.10)" stroke-width="0.8"/>
+    <rect x="1200" y="174" width="200" height="12" rx="2" fill="#141312"/>
+    <text x="1300" y="184" fill="rgba(206,205,195,0.40)" font-size="10" text-anchor="middle" letter-spacing="0.14em">LOCAL STORE &#8212; DISK</text>
+
+    <rect x="1080" y="240" width="440" height="110" rx="8" fill="rgba(36,131,123,0.10)" stroke="#24837B" stroke-width="1.6"/>
+    <text x="1300" y="286" fill="#CECDC3" font-size="16" text-anchor="middle" font-weight="600">content-addressable store</text>
+    <text x="1300" y="311" fill="#878580" font-size="11" text-anchor="middle">sha256 blobs + mtime / size provenance</text>
+
+    <rect x="1080" y="430" width="440" height="100" rx="8" fill="#1C1B1A" stroke="rgba(206,205,195,0.18)" stroke-width="1.2"/>
+    <text x="1300" y="472" fill="#CECDC3" font-size="16" text-anchor="middle">confidence scoring</text>
+    <text x="1300" y="497" fill="#878580" font-size="11" text-anchor="middle">freshness proof &#8212; stale never served</text>
+
+    <rect x="1080" y="560" width="440" height="100" rx="8" fill="#1C1B1A" stroke="rgba(206,205,195,0.18)" stroke-width="1.2"/>
+    <text x="1300" y="602" fill="#CECDC3" font-size="16" text-anchor="middle">RRF recall index</text>
+    <text x="1300" y="627" fill="#878580" font-size="11" text-anchor="middle">inverted index &#8212; O(candidates)</text>
+
+    <rect x="1080" y="690" width="440" height="60" rx="8" fill="#1C1B1A" stroke="rgba(206,205,195,0.18)" stroke-width="1.2"/>
+    <text x="1300" y="725" fill="#CECDC3" font-size="14" text-anchor="middle">metering &#8212; net gain, OLS calibrated</text>
+  </g>
+
+  <path d="M 360,385 H 440 Q 448,385 448,377 V 298 Q 448,290 456,290 H 520" fill="none" stroke="#878580" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <text x="452" y="345" fill="#878580" font-size="10" text-anchor="middle">read_file</text>
+
+  <path d="M 1080,270 H 868" fill="none" stroke="#24837B" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+  <text x="974" y="260" fill="#24837B" font-size="10" text-anchor="middle">serve + proof</text>
+
+  <path d="M 690,240 V 120 H 220 Q 212,120 212,128 V 330" fill="none" stroke="#DA702C" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-warn)"/>
+  <text x="450" y="112" fill="#DA702C" font-size="10" text-anchor="middle">stale &#8212; tool re-runs for real</text>
+
+  <path d="M 860,480 H 1080" fill="none" stroke="#878580" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <text x="970" y="470" fill="#878580" font-size="10" text-anchor="middle">ingest</text>
+
+  <path d="M 1300,430 V 358" fill="none" stroke="#878580" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+  <path d="M 220,440 V 555 Q 220,563 228,563 H 460 Q 468,563 468,555 V 563 H 1080" fill="none" stroke="#878580" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <text x="700" y="585" fill="#878580" font-size="10" text-anchor="middle">recall(query) &#8212; RRF fused ranking</text>
+
+  <path d="M 520,670 H 400 Q 392,670 392,662 V 448 Q 392,440 384,440 H 368" fill="none" stroke="#878580" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <text x="455" y="660" fill="#878580" font-size="10" text-anchor="middle">collapsed view</text>
+
+  <text x="60" y="850" fill="#878580" font-size="11">solid &#8212; primary flow &#160;&#160;&#160; dashed &#8212; fail-open path (the tool always re-runs when in doubt)</text>
+</svg>
