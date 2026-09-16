@@ -104,6 +104,9 @@ export function ingestContent(
 		if (provenance.dirSize !== undefined) existing.dirSize = provenance.dirSize;
 		if (provenance.fullFile !== undefined) existing.fullFile = provenance.fullFile;
 		if (provenance.realPath !== undefined) existing.realPath = provenance.realPath;
+		if (provenance.filePath !== undefined && provenance.fileMtime !== undefined) {
+			existing.editedByModel = false;
+		}
 		
 		
 		

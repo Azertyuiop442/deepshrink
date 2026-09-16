@@ -576,6 +576,7 @@ export class Executor {
 					}
 					if (existing && this.blobContents.has(existing.hash) && this.blobContents.get(existing.hash) === redactedContent) {
 						this.reReads++;
+						existing.editedByModel = false;
 						const precededByRecall = this.lastRecallOutcome !== undefined;
 						const outcome = this.lastRecallOutcome;
 						this.lastRecallOutcome = undefined;
@@ -881,14 +882,16 @@ export class Executor {
 		}
 		const meta = this.state.blobs.get(best.hash)!;
 		
-		let stale = meta.editedByModel === true;
-		if (!stale) {
-			try {
-				const st = statSync(real);
-				if (meta.fileMtime !== undefined && (st.mtimeMs !== meta.fileMtime || st.size !== meta.fileSize)) stale = true;
-			} catch {
-				stale = true; 
+		let stale = false;
+		try {
+			const st = statSync(real);
+			if (meta.fileMtime !== undefined) {
+				stale = st.mtimeMs !== meta.fileMtime || st.size !== meta.fileSize;
+			} else {
+				stale = meta.editedByModel === true;
 			}
+		} catch {
+			stale = true;
 		}
 		if (stale) {
 			this.windowCounters.windowMissStale++;
@@ -1453,11 +1456,19 @@ export class Executor {
 		
 		const rankRel = new Map<string, number>();
 		const rankConf = new Map<string, number>();
-		hits.forEach((h, i) => rankRel.set(h.ref, i + 1));
+		const confByRef = new Map<string, number | undefined>();
+		hits.forEach((h, i) => {
+			rankRel.set(h.ref, i + 1);
+			confByRef.set(h.ref, h.score);
+		});
 		[...hits].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).forEach((h, i) => rankConf.set(h.ref, i + 1));
 		const fused = rrfFuse(hits.map(h => ({ item: h, ranks: [rankRel.get(h.ref) ?? 0, rankConf.get(h.ref) ?? 0] })));
 		hits.length = 0;
 		for (const f of fused) hits.push(f as RecallHit);
+		for (const h of hits) {
+			const confidence = confByRef.get(h.ref);
+			if (confidence !== undefined) h.score = confidence;
+		}
 		void relevance; 
 		this.recallMeter.indexSize = this.termIndex?.size ?? 0;
 		

@@ -71,12 +71,14 @@ export function scoreConfidence(s: FreshnessSignals): ConfidenceResult {
 
 	
 	if (meta.source === 'read_file' && meta.filePath) {
-		if (s.editedByModel || meta.editedByModel) {
-			score -= 60;
-			flags.push('edited by model');
-		} else if (s.fileNow === undefined) {
+		if (s.fileNow === undefined) {
+			if (s.editedByModel || meta.editedByModel) {
+				score -= 60;
+				flags.push('edited by model');
+			} else {
 			
-			flags.push('read_file (unverified)');
+				flags.push('read_file (unverified)');
+			}
 		} else if (s.fileNow === null) {
 			score -= 60;
 			flags.push('file deleted');
@@ -88,6 +90,9 @@ export function scoreConfidence(s: FreshnessSignals): ConfidenceResult {
 				score -= 60;
 				flags.push('file modified');
 			}
+		} else if (s.editedByModel || meta.editedByModel) {
+			score -= 60;
+			flags.push('edited by model');
 		} else {
 			
 			
@@ -97,10 +102,7 @@ export function scoreConfidence(s: FreshnessSignals): ConfidenceResult {
 		
 		
 		
-		if (meta.editedByModel) {
-			score -= 60;
-			flags.push('edited by model');
-		} else if (s.shellFileNow === null) {
+		if (s.shellFileNow === null) {
 			score -= 60;
 			flags.push('file deleted');
 		} else if (s.shellFileMtime !== undefined) {
@@ -111,6 +113,9 @@ export function scoreConfidence(s: FreshnessSignals): ConfidenceResult {
 				score -= 60;
 				flags.push('file modified');
 			}
+		} else if (meta.editedByModel) {
+			score -= 60;
+			flags.push('edited by model');
 		} else {
 			flags.push('command (unverified)');
 		}
