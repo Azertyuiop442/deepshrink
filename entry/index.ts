@@ -197,10 +197,11 @@ export default function deepshrinkMod(cmd: ModApi): void {
 	
 	const pushState = () => pushEnabled(MOD_ID, executor.config.enabled);
 	pushState();
-	setInterval(() => {
+	const dashCfgTimer = setInterval(() => {
 		void applyDashboardConfig();
 		pushState();
 	}, 5_000);
+	dashCfgTimer.unref?.();
 
 	
 	cmd.hooks({

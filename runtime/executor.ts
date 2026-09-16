@@ -28,7 +28,7 @@ import { rrfFuse } from '../core/rrf.ts';
 import { myersDiff, summarizeDiff, formatDeltaPatch } from '../core/delta.ts';
 import { checkLcp } from '../core/lcp.ts';
 import { expectedCalibrationError } from '../core/ece.ts';
-import { emptyIndex, indexAdd, indexRemove, indexQuery, indexPathLookup, type TermIndex } from '../core/termindex.ts';
+import { emptyIndex, indexAdd, indexRemoveMany, indexQuery, indexPathLookup, type TermIndex } from '../core/termindex.ts';
 import { updateActiveFiles, newActiveFiles, isActiveFile } from '../core/active.ts';
 import { recordFailure, recordSuccess, advanceTurn, allowed as breakerAllowed, type BreakerStatus, CLOSED } from '../core/breaker.ts';
 import { calibrateEstimate, estimateTokens, budgetInfo, breakEven, DEFAULT_METER, type MeterState } from '../core/metering.ts';
@@ -199,6 +199,8 @@ export function dirSignature(p: string): { mtimeMs: number; size: number } | und
 	return { mtimeMs: maxMtime, size: count };
 }
 
+const CHECKPOINT_MIN_INTERVAL_MS = 5000;
+
 export class Executor {
 	config: DeepSkrinConfig = { ...DEFAULT_CONFIG };
 	state: BlobStoreState = { blobs: new Map(), indexRev: 0 };
@@ -272,7 +274,11 @@ export class Executor {
 	private lastSummaryId: string | undefined = undefined;
 	
 	private termIndex: TermIndex | undefined;
-	private termIndexRev = -1;
+	private indexedHashes = new Set<string>();
+	private indexEpoch = 0;
+	private idfCache: { epoch: number; corpus: number; table: import('../core/relevance.ts').IdfTable } | undefined;
+	private checkpointDirty = false;
+	private lastCheckpointAt = 0;
 
 	private deps: ExecutorDeps;
 
@@ -374,6 +380,7 @@ export class Executor {
 		this.deps.registry.unregister(this.sessionId);
 		await this.deps.registry.save();
 		this.emit('session', 'info', { action: 'end' });
+		await this.flushCheckpoint();
 		await this.log.flush();
 		this.live = false;
 	}
@@ -467,8 +474,7 @@ export class Executor {
 				this.purgeStamp = purged;
 				this.state = { blobs: new Map(), indexRev: 0 };
 				this.blobContents.clear();
-				this.termIndex = undefined;
-				this.termIndexRev = -1;
+				this.resetTermIndex();
 				this.toolCalls = [];
 				this.emit('store', 'info', { action: 'purge-resync' });
 			}
@@ -641,11 +647,11 @@ export class Executor {
 				if (res.newBlobs > 0) {
 					await this.deps.store.saveBlob(res.hash, redactedContent);
 					this.blobContents.set(res.hash, redactedContent);
-					indexAdd(this.termIndex ??= emptyIndex(), {
-						hash: res.hash,
-						content: redactedContent,
-						path: path ?? (toolName === 'shell_command' && command ? findFilePathInCommand(command) : undefined),
-					});
+					this.indexIngest(
+						res.hash,
+						redactedContent,
+						path ?? (toolName === 'shell_command' && command ? findFilePathInCommand(command) : undefined),
+					);
 					
 					
 					
@@ -658,13 +664,14 @@ export class Executor {
 				
 				
 				if (res.superseded.length > 0) {
+					const goneSuperseded = new Set(res.superseded);
 					for (const h of res.superseded) {
 						try { await this.deps.store.deleteBlob(h); } catch (e) {
 							this.emit('store', 'warn', { action: 'supersede-delete', hash: h.slice(0, this.config.hashPrefixChars), error: String(e) });
 						}
 						this.blobContents.delete(h);
-						indexRemove(this.termIndex, h);
 					}
+					this.indexForget(goneSuperseded);
 					
 					
 					const c = supersedeCounts(res);
@@ -674,7 +681,7 @@ export class Executor {
 				
 				
 				if (res.newBlobs > 0 || res.superseded.length > 0) {
-					await this.deps.store.checkpoint(this.state);
+					await this.maybeCheckpoint();
 					
 					
 					await this.deps.store.saveMetrics({
@@ -793,22 +800,23 @@ export class Executor {
 			if (res.newBlobs > 0) {
 				await this.deps.store.saveBlob(res.hash, text);
 				this.blobContents.set(res.hash, text);
-				indexAdd(this.termIndex ??= emptyIndex(), { hash: res.hash, content: text, path: real });
+				this.indexIngest(res.hash, text, real);
 				
 				
 				this.markServed(res.hash);
 				this.emit('store', 'debug', { action: 'full-file', hash: res.short, path: real, bytes: text.length });
 			}
 			if (res.superseded.length > 0) {
+				const goneFullFile = new Set(res.superseded);
 				for (const h of res.superseded) {
 					try { await this.deps.store.deleteBlob(h); } catch (e) {
 						this.emit('store', 'warn', { action: 'fullfile-supersede-delete', hash: h.slice(0, this.config.hashPrefixChars), error: String(e) });
 					}
 					this.blobContents.delete(h);
-					indexRemove(this.termIndex, h);
 				}
+				this.indexForget(goneFullFile);
 			}
-			if (res.newBlobs > 0 || res.superseded.length > 0) await this.deps.store.checkpoint(this.state);
+			if (res.newBlobs > 0 || res.superseded.length > 0) await this.maybeCheckpoint();
 		} catch (e) {
 			
 			
@@ -1189,16 +1197,43 @@ export class Executor {
 	
 
 
+	private indexIngest(hash: string, content: string, path?: string): void {
+		indexAdd((this.termIndex ??= emptyIndex()), { hash, content, path });
+		this.indexedHashes.add(hash);
+		this.indexEpoch++;
+	}
+
+	private indexForget(hashes: Set<string>): void {
+		if (hashes.size === 0) return;
+		for (const h of hashes) this.indexedHashes.delete(h);
+		indexRemoveMany(this.termIndex, hashes);
+		this.indexEpoch++;
+	}
+
+	private resetTermIndex(): void {
+		this.termIndex = undefined;
+		this.indexedHashes.clear();
+		this.idfCache = undefined;
+		this.indexEpoch++;
+	}
+
 	private ensureTermIndex(): void {
-		if (this.termIndex !== undefined && this.termIndexRev === this.state.indexRev) return;
-		const idx = emptyIndex();
+		const idx = (this.termIndex ??= emptyIndex());
+		const stale: string[] = [];
+		for (const hash of this.indexedHashes) {
+			if (!this.state.blobs.has(hash)) stale.push(hash);
+		}
+		if (stale.length > 0) this.indexForget(new Set(stale));
+		let added = false;
 		for (const [hash, meta] of this.state.blobs) {
+			if (this.indexedHashes.has(hash)) continue;
 			const content = this.blobContents.get(hash);
 			if (content === undefined) continue;
 			indexAdd(idx, { hash, content, path: meta.realPath ?? meta.filePath });
+			this.indexedHashes.add(hash);
+			added = true;
 		}
-		this.termIndex = idx;
-		this.termIndexRev = this.state.indexRev;
+		if (added) this.indexEpoch++;
 	}
 
 	async recall(query: string, limit = 5, opts: { fullContent?: boolean } = {}): Promise<{ hits: RecallHit[]; staleHints: StaleHint[]; total: number }> {
@@ -1219,9 +1254,6 @@ export class Executor {
 					for (const [hash, meta] of diskState.blobs) {
 						if (!this.state.blobs.has(hash)) {
 							this.state.blobs.set(hash, meta);
-							
-							this.termIndex = undefined;
-							this.termIndexRev = -1;
 						}
 					}
 					this.state.indexRev = Math.max(this.state.indexRev, diskState.indexRev);
@@ -1444,7 +1476,10 @@ export class Executor {
 		let idf: import('../core/relevance.ts').IdfTable | undefined;
 		if (this.termIndex !== undefined) {
 			this.ensureTermIndex();
-			idf = buildIdf(this.termIndex, this.state.blobs.size);
+			if (!this.idfCache || this.idfCache.epoch !== this.indexEpoch || this.idfCache.corpus !== this.state.blobs.size) {
+				this.idfCache = { epoch: this.indexEpoch, corpus: this.state.blobs.size, table: buildIdf(this.termIndex, this.state.blobs.size) };
+			}
+			idf = this.idfCache.table;
 		}
 		const relevance = scoreRelevanceHits(hits, query, idf, this.state.blobs.size);
 		
@@ -1813,6 +1848,7 @@ export class Executor {
 		this.errorsAtLastTurn = this.errors;
 		
 		
+		await this.flushCheckpoint();
 		await this.log.flush();
 	}
 
@@ -1909,30 +1945,74 @@ export class Executor {
 
 	
 
+	private async maybeCheckpoint(force = false): Promise<void> {
+		this.checkpointDirty = true;
+		const now = Date.now();
+		if (!force && now - this.lastCheckpointAt < CHECKPOINT_MIN_INTERVAL_MS) return;
+		this.lastCheckpointAt = now;
+		this.checkpointDirty = false;
+		await this.deps.store.checkpoint(this.state);
+	}
+
+	private async flushCheckpoint(): Promise<void> {
+		if (this.checkpointDirty) await this.maybeCheckpoint(true);
+	}
+
+	private async enforceStoreCap(): Promise<Set<string>> {
+		const evicted = new Set<string>();
+		const capBytes = this.config.maxStoreBytes;
+		const capBlobs = this.config.maxStoreBlobs;
+		if (capBytes <= 0 && capBlobs <= 0) return evicted;
+		let totalBytes = 0;
+		for (const meta of this.state.blobs.values()) totalBytes += meta.size;
+		const over = () => (capBytes > 0 && totalBytes > capBytes) || (capBlobs > 0 && this.state.blobs.size > capBlobs);
+		if (!over()) return evicted;
+		const active = this.deps.registry.activeSessions();
+		const candidates = [...this.state.blobs.values()]
+			.filter(m => !active.has(m.session))
+			.sort((a, b) => (a.lastRef || a.createdAt) - (b.lastRef || b.createdAt));
+		for (const meta of candidates) {
+			if (!over()) break;
+			totalBytes -= meta.size;
+			evicted.add(meta.hash);
+			this.state.blobs.delete(meta.hash);
+			this.blobContents.delete(meta.hash);
+			try { await this.deps.store.deleteBlob(meta.hash); } catch {}
+		}
+		if (evicted.size > 0) this.state.indexRev += 1;
+		return evicted;
+	}
+
 	async runGc(force = false): Promise<{ removed: number; remaining: number }> {
+		this.deps.registry.heartbeat(this.sessionId);
 		const before = new Set(this.state.blobs.keys());
 		const res = gcStore(this.state, {
 			minAgeMs: force ? 0 : this.config.gcMinBlobAgeMs,
 			activeSessions: this.deps.registry.activeSessions(),
 		});
+		const removedHashes = new Set<string>();
+		for (const hash of before) {
+			if (!this.state.blobs.has(hash)) {
+				removedHashes.add(hash);
+				this.blobContents.delete(hash);
+			}
+		}
+		const evicted = await this.enforceStoreCap();
+		for (const h of evicted) removedHashes.add(h);
 		for (const [hash] of this.state.blobs) {
 			if (!this.blobContents.has(hash)) {
 				const c = await this.deps.store.readBlob(hash);
 				if (c !== undefined) this.blobContents.set(hash, c);
 			}
 		}
-		
-		if (this.termIndex !== undefined && res.removed > 0) {
-			for (const [hash] of before) {
-				if (!this.state.blobs.has(hash)) indexRemove(this.termIndex, hash);
-			}
-		}
-		await this.deps.store.checkpoint(this.state);
+		if (removedHashes.size > 0) this.indexForget(removedHashes);
+		await this.maybeCheckpoint(true);
 		if (res.removed > 0) {
 			this.emit('store', 'info', { action: 'gc', blobs: res.removed });
 			this.deps.host?.notify?.(this.i18n.t('notify.gcDone', { n: res.removed }));
 		}
-		return { removed: res.removed, remaining: res.blobsRemaining };
+		if (evicted.size > 0) this.emit('store', 'info', { action: 'evict', blobs: evicted.size });
+		return { removed: res.removed + evicted.size, remaining: this.state.blobs.size };
 	}
 
 	
@@ -1943,8 +2023,7 @@ export class Executor {
 		}
 		this.state = { blobs: new Map(), indexRev: 0 };
 		this.blobContents.clear();
-		this.termIndex = undefined;
-		this.termIndexRev = -1;
+		this.resetTermIndex();
 		this.toolCalls = [];
 		await this.deps.store.checkpoint(this.state);
 		
@@ -1975,8 +2054,8 @@ export class Executor {
 			try { await this.deps.store.deleteBlob(hash); } catch {}
 			this.state.blobs.delete(hash);
 			this.blobContents.delete(hash);
-			indexRemove(this.termIndex, hash);
 		}
+		if (toDelete.length > 0) this.indexForget(new Set(toDelete));
 		await this.deps.store.checkpoint(this.state);
 		
 		
@@ -2028,8 +2107,7 @@ export class Executor {
 				const { state } = await this.deps.store.loadState();
 				this.state = state;
 				this.blobContents.clear();
-				this.termIndex = undefined;
-				this.termIndexRev = -1;
+				this.resetTermIndex();
 				this.emit('store', 'info', { action: 'purge-resync' });
 			}
 		} catch {}

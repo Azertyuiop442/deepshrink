@@ -91,15 +91,18 @@ export function indexAdd(index: TermIndex, entry: IndexedEntry): void {
 
 
 
-export function indexRemove(index: TermIndex | undefined, hash: string): void {
-	if (!index) return;
-	for (const [, postings] of index) {
-		postings.delete(hash);
-	}
-	
+export function indexRemoveMany(index: TermIndex | undefined, hashes: Set<string>): void {
+	if (!index || hashes.size === 0) return;
+	const empties: string[] = [];
 	for (const [term, postings] of index) {
-		if (postings.size === 0) index.delete(term);
+		if (postings.size > 0) {
+			for (const h of postings.keys()) {
+				if (hashes.has(h)) postings.delete(h);
+			}
+		}
+		if (postings.size === 0) empties.push(term);
 	}
+	for (const term of empties) index.delete(term);
 }
 
 

@@ -35,6 +35,9 @@ export interface DeepSkrinConfig {
 	gcMinBlobAgeMs: number;
 	gcIntervalMs: number;        
 	
+	maxStoreBytes: number;
+	maxStoreBlobs: number;
+
 	digestEnabled: boolean;
 	
 	
@@ -73,6 +76,8 @@ export const DEFAULT_CONFIG: DeepSkrinConfig = {
 	breakerHalfOpenTurns: 5,
 	gcMinBlobAgeMs: 30 * 60_000,
 	gcIntervalMs: 30 * 60_000,
+	maxStoreBytes: 256 * 1024 * 1024,
+	maxStoreBlobs: 40000,
 	digestEnabled: true,
 	
 	
