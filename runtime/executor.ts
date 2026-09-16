@@ -465,6 +465,7 @@ export class Executor {
 
 		return this.serialized(async () => {
 			const start = Date.now();
+			let deltaPatch: string | undefined;
 			
 			
 			
@@ -559,25 +560,20 @@ export class Executor {
 						m => m.source === 'read_file' && m.fileMtime === fileMtime &&
 							((real !== undefined && m.realPath === real) || m.filePath === path),
 					);
-					if (existing && this.blobContents.has(existing.hash) && this.blobContents.get(existing.hash) === redactedContent) {
-						
-						
-						
-						
-						
-						
-						const prevContent = this.blobContents.get(existing.hash);
-						if (prevContent && prevContent !== redactedContent) {
-							const summary = summarizeDiff(prevContent, redactedContent);
-							if (summary.changedRatio <= 0.4) {
-								const patch = formatDeltaPatch(summary, path);
-								this.fidelityMeter.fidelityServes++;
-								this.emit('view', 'info', { action: 'delta-elide', hash: existing.hash.slice(0, this.config.hashPrefixChars), path, bytes: redactedContent.length, patchBytes: patch.length, ratio: summary.changedRatio });
-								this.toolCalls.push({ tool: toolName, input: JSON.stringify(input).slice(0, 200), path, hash: existing.hash });
-								if (this.toolCalls.length > 200) this.toolCalls.shift();
-								return { content: [{ type: 'text', text: patch }] };
+					if (path && real !== undefined) {
+						const prior = [...this.state.blobs.values()]
+							.filter(m => m.source === 'read_file' && (m.realPath === real || m.filePath === path))
+							.filter(m => this.blobContents.has(m.hash))
+							.sort((a, b) => (b.lastRef || 0) - (a.lastRef || 0))[0];
+						if (prior && this.isStubSafe(prior.hash)) {
+							const prevContent = this.blobContents.get(prior.hash);
+							if (prevContent !== undefined && prevContent !== redactedContent) {
+								const summary = summarizeDiff(prevContent, redactedContent);
+								if (summary.changedRatio <= 0.4) {
+									const patch = formatDeltaPatch(summary, path);
+									if (patch.length < redactedContent.length) deltaPatch = patch;
+								}
 							}
-							
 						}
 					}
 					if (existing && this.blobContents.has(existing.hash) && this.blobContents.get(existing.hash) === redactedContent) {
@@ -708,6 +704,11 @@ export class Executor {
 			this.toolCalls.push({ tool: toolName, input: JSON.stringify(input).slice(0, 200), path, hash: ingestedHash });
 			if (this.toolCalls.length > 200) this.toolCalls.shift();
 			this.emit('hook', 'debug', { action: 'afterToolCall', ms: Date.now() - start });
+			if (deltaPatch !== undefined) {
+				this.fidelityMeter.fidelityServes++;
+				this.emit('view', 'info', { action: 'delta-elide', path, bytes: redactedContent.length, patchBytes: deltaPatch.length });
+				return { content: [{ type: 'text', text: deltaPatch }] };
+			}
 
 			
 			

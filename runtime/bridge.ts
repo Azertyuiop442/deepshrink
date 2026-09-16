@@ -194,7 +194,7 @@ export function startPickupWatcher(
 	intervalMs = 2000,
 	bypassGuard?: (pickup: Pickup) => boolean,
 ): void {
-	watchers.push(setInterval(() => {
+	const timer = setInterval(() => {
 		try {
 			const pickup = peekPickup(modId);
 			if (!pickup) return;
@@ -205,7 +205,9 @@ export function startPickupWatcher(
 			}
 			handler(pickup, consumePickup);
 		} catch {}
-	}, intervalMs));
+	}, intervalMs);
+	timer.unref?.();
+	watchers.push(timer);
 }
 
 

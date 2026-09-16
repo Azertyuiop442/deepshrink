@@ -25,6 +25,8 @@ export interface TextCrushResult {
 }
 
 
+const SIGNAL_KEEP_RE = /\bhttps?:\/\/|\bwww\.|\bv?\d+\.\d+(?:\.\d+)*\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b\d+(?:[.,]\d+)?\s?(?:%|€|\$|£|USD|EUR|KB|MB|GB|TB|ms|µs|ns)|\b[a-f0-9]{7,40}\b/i;
+
 function salientScore(seg: string): number {
 	let score = 0;
 	if (/\berror\b|\bexception\b|\bfailed\b|\bfail\b|\bwarning\b|\btraceback\b|\bassert\b|\btodo\b|\bfixme\b/i.test(seg)) score += 1.5;
@@ -75,6 +77,9 @@ export function crushText(text: string, options: Partial<TextCrushOptions> = {})
 			for (const s of scored) {
 				if (/error|fail|exception|traceback|✗|×|not ok/i.test(s.seg)) kept.add(s.i);
 			}
+		}
+		for (const s of scored) {
+			if (SIGNAL_KEEP_RE.test(s.seg)) kept.add(s.i);
 		}
 		
 		

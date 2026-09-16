@@ -40,9 +40,10 @@ faithful compression.
    then elision resumes. Hash-epoch mechanism, absent from every naive cache approach.
 
 5. **Compression that never lies.** Negations are structurally impossible to drop,
-   numbers/dates/URLs/identifiers preserved, any compression that does not save enough
-   is discarded, errors are always shown. The store is content-addressable (sha256),
-   100% local, zero dependencies.
+   numbers/dates/URLs/hashes/amounts force-kept when large texts are crushed, any prose
+   compression that does not save enough is discarded, errors are always shown. The store
+   is content-addressable (sha256), 100% local runtime, zero dependencies (the only
+   outbound call refreshes the public model-pricing grid).
 
 ## Positioning in one sentence
 
@@ -83,9 +84,10 @@ re-reads of modified files cost only their diff:
    match. Prewalk's context transfer has no freshness notion - if a file changes
    mid-run, the cheap model reasons over stale context with no signal.
 3. **Faithful compression on top.** Prewalk transfers the context verbatim; the token
-   volume is untouched. DeepSkrin shrinks compressible tool outputs (up to 50-90% on
-   structured JSON) before they enter context, and passes through anything that does
-   not compress by at least 10% - so even the reads that DO happen cost less, for the
+   volume is untouched. DeepSkrin shrinks compressible tool outputs (up to -91% on
+   structured JSON, ~-80% on a mixed corpus - reproduce with `node bench/run.mjs`)
+   before they enter context, and passes through any prose compression that does
+   not save by at least 10% - so even the reads that DO happen cost less, for the
    frontier model during planning and for the cheap model during execution.
 4. **Minimal harness requirements.** DeepSkrin needs hooks (beforeToolCall /
    afterToolCall / transformContext), not a two-model swap - single model, fail-open

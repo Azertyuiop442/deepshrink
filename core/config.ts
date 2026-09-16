@@ -48,7 +48,7 @@ export interface DeepSkrinConfig {
 	compressEnabled: boolean;
 	compressMinChars: number;
 	compressTargetRatio: number;
-	language: 'auto' | 'fr' | 'en';
+	language: 'auto' | 'fr' | 'en' | 'es' | 'de';
 	
 	
 	
