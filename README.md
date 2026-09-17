@@ -211,7 +211,7 @@ Awareness: while enabled, the harness re-injects a one-line hint (appendSystemPr
 every request, so the store tools stay known even after a compaction erased earlier
 mentions; elision stubs and masked placeholders repeat the same pointers exactly where
 the model is about to re-read.
-Project playbook (deterministic, ACE-inspired): the mod keeps a small per-project list of
+Project playbook (deterministic): the mod keeps a small per-project list of
 the files it actually serves - a fresh serve counts as helpful, a refusal that told you
 to re-read counts as harmful - and injects the top entries into the compaction state
 summary, so the context that survives a compaction carries proven provenance instead of
