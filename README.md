@@ -168,6 +168,7 @@ verify with `/deepshrink status`.
 - Tool elision with a net <= 0 replacement (the note is not smaller than the content): the tool runs for real.
 - Prose compression saving < 10%: discarded.
 - Errors are never hidden, always shown to the model.
+- Observation masking never touches errors, error-flagged results, the first observation, small outputs or the last N outputs; masked text stays recoverable (blob ref or recall).
 - Credentials are redacted before anything is stored.
 
 <details>
@@ -194,6 +195,32 @@ the serve ships only when the replacement is strictly smaller than the slice it 
 ratio, oversize, patch, window).
 Known limit: windowed output without compaction ("seen = still in context") remains an
 unverifiable-by-hook heuristic.
+Observation masking: tool outputs older than the last N (default 8) are replaced with a
+recoverable placeholder that keeps the line/char counts (plus the blob ref when the
+text is in the store). The cut moves at most every `polling` observations (default 4),
+so the prompt prefix stays byte-stable between moves; deterministic, no LLM, errors and
+small outputs are exempt. Counters in `/deepshrink status` (`mask:`).
+Symbol retrieval: the `deepshrink_symbol` tool serves one named definition (function,
+class, struct, ...) with its body and line range from the store, with the same
+freshness proof - a file that changed on disk is never served as a definition, it is
+reported as a stale candidate.
+Context pressure: `/deepshrink status` adds a deterministic reading (growth per turn,
+cache ratio, turns since compaction) with advice when the context needs attention; the
+dashboard bridge exposes the same signal as a live segment.
+Awareness: while enabled, the harness re-injects a one-line hint (appendSystemPrompt) on
+every request, so the store tools stay known even after a compaction erased earlier
+mentions; elision stubs and masked placeholders repeat the same pointers exactly where
+the model is about to re-read.
+Project playbook (deterministic, ACE-inspired): the mod keeps a small per-project list of
+the files it actually serves - a fresh serve counts as helpful, a refusal that told you
+to re-read counts as harmful - and injects the top entries into the compaction state
+summary, so the context that survives a compaction carries proven provenance instead of
+guesses. `/deepshrink playbook` shows it; `reset` clears it. Capped, eviction-sorted, no
+LLM involved.
+Cross-CLI store: `scripts/mcp-server.mjs` serves the same local store over MCP (stdio) to
+any MCP client - recall and symbol tools, read-only, with the same freshness proof (a
+file that changed on disk is never served as content). Point it at the store with
+`DEEPSHRINK_DATA_DIR` and register it in your client.
 
 </details>
 

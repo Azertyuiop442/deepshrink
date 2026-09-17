@@ -116,6 +116,7 @@ const DEFAULT_RULES: Rule[] = [
 			],
 			minChars: 400,
 		},
+		onEmpty: 'ok (no output)',
 	},
 	{
 		name: 'diff-summary',
@@ -228,7 +229,13 @@ export function applyRule(rule: Rule, toolName: string, command: string | undefi
 				return !action.patterns.some(p => p.test(l));
 			});
 			const out6 = kept.join('\n');
-			if (out6.length === 0 || out6.length >= text.length) return { text: undefined, rule: undefined, savedChars: 0 };
+			if (out6.length === 0) {
+				if (rule.onEmpty !== undefined && text.length > rule.onEmpty.length) {
+					return { text: rule.onEmpty, rule: rule.name, savedChars: text.length - rule.onEmpty.length };
+				}
+				return { text: undefined, rule: undefined, savedChars: 0 };
+			}
+			if (out6.length >= text.length) return { text: undefined, rule: undefined, savedChars: 0 };
 			return { text: out6, rule: rule.name, savedChars: text.length - out6.length };
 		}
 		case 'install-summary': {
@@ -422,6 +429,12 @@ export function applyRule(rule: Rule, toolName: string, command: string | undefi
 }
 
 
+export function stripAnsi(text: string): string {
+	return text
+		.replace(/\u001B\[[0-9;?]*[A-Za-z]/g, '')
+		.replace(/\u001B\][^\u0007\u001B]*(\u0007|\u001B\\)/g, '');
+}
+
 export function digestToolOutput(
 	toolName: string,
 	command: string | undefined,
@@ -439,13 +452,17 @@ export function digestToolOutput(
 	if (opts.path && opts.activeFilePaths?.has(opts.path)) {
 		return { text: undefined, rule: undefined, savedChars: 0 }; 
 	}
+	const clean = toolName === 'shell_command' ? stripAnsi(text) : text;
 	const vars: Record<string, string | number> = {};
 	if (opts.path !== undefined) vars.path = opts.path;
 	if (opts.code !== undefined) vars.code = opts.code;
 	const rules = opts.rules ?? defaultRules();
 	for (const rule of rules) {
-		const res = applyRule(rule, toolName, command, text, vars);
+		const res = applyRule(rule, toolName, command, clean, vars);
 		if (res.text !== undefined) return res;
+	}
+	if (clean !== text) {
+		return { text: clean, rule: 'strip-ansi', savedChars: text.length - clean.length };
 	}
 	return { text: undefined, rule: undefined, savedChars: 0 };
 }

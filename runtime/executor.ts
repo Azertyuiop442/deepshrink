@@ -26,6 +26,10 @@ import { crushText } from '../core/textcrusher.ts';
 import { queryTerms, scoreRelevance, buildIdf } from '../core/relevance.ts';
 import { rrfFuse } from '../core/rrf.ts';
 import { summarizeDiffTrimmed, stripLinePrefixes, formatDeltaPatch, formatWindowDelta, countTextLines, EMPTY_DELTA_METER, type DeltaMeter, type DiffSummary } from '../core/delta.ts';
+import { maskCut, shouldMask, buildMaskPlaceholder, EMPTY_MASK_METER, type MaskMeter } from '../core/mask.ts';
+import { computePressure, type PressureReading } from '../core/pressure.ts';
+import { extractSymbol } from '../core/symbol.ts';
+import { emptyPlaybook, parsePlaybook, touchServe, touchStale, renderPlaybook, type PlaybookState } from '../core/playbook.ts';
 import { checkLcp } from '../core/lcp.ts';
 import { expectedCalibrationError } from '../core/ece.ts';
 import { emptyIndex, indexAdd, indexRemoveMany, indexQuery, indexPathLookup, type TermIndex } from '../core/termindex.ts';
@@ -252,6 +256,16 @@ export class Executor {
 	deltaMeter: DeltaMeter = { ...EMPTY_DELTA_METER };
 	private deltaCache = new Map<string, { mtimeMs: number; size: number; oldHash: string; summary: DiffSummary; newLines: number; totalOldLines: number }>();
 	
+	maskMeter: MaskMeter = { ...EMPTY_MASK_METER };
+	private lastMaskSig = '';
+	private turnCount = 0;
+	private turnAtEpoch = 0;
+	private lastRequestCacheRatio: number | null = null;
+	private maskChangedPending = false;
+	
+	playbook: PlaybookState = emptyPlaybook();
+	private playbookDirty = false;
+	
 
 	behavior: { readsWithoutPriorRecall: number; recallThenRead: number } = { readsWithoutPriorRecall: 0, recallThenRead: 0 };
 	
@@ -347,6 +361,9 @@ export class Executor {
 			if (f) this.fidelityMeter = { fidelityServes: 0, stubServes: 0, recallCalls: 0, postCompactionStubs: 0, frozenRewriteRefusals: 0, ...f };
 			const d = m.deltaMeter as Partial<DeltaMeter> | undefined;
 			if (d) this.deltaMeter = { ...EMPTY_DELTA_METER, ...d };
+			const k = m.maskMeter as Partial<MaskMeter> | undefined;
+			if (k) this.maskMeter = { ...EMPTY_MASK_METER, ...k };
+			this.playbook = parsePlaybook(m);
 		} catch (e) {
 			this.emit('store', 'warn', { action: 'metrics-load', error: String(e) });
 		}
@@ -607,7 +624,7 @@ export class Executor {
 						if (this.toolCalls.length > 200) this.toolCalls.shift();
 						const lineCount = content.split('\n').length;
 						return {
-							content: [{ type: 'text', text: `[Read: ${lineCount} lines from ${path} — unchanged, content already in store [blob:${existing.hash.slice(0, this.config.hashPrefixChars)}]. Use deepshrink_recall to re-read it.]` }],
+							content: [{ type: 'text', text: `[Read: ${lineCount} lines from ${path} — unchanged, content already in store [blob:${existing.hash.slice(0, this.config.hashPrefixChars)}]. Use deepshrink_recall to re-read it, or deepshrink_symbol(name) for one definition.]` }],
 						};
 					}
 					
@@ -915,6 +932,7 @@ export class Executor {
 		}
 		this.deltaMeter.servedFull++;
 		this.deltaMeter.savedChars += Math.max(0, full - patch.length);
+		this.playbookServe(real, cand.hash);
 		await this.persistMeters();
 		this.emit('view', 'info', { action: 'delta-elide', path, bytes: full, patchBytes: patch.length, mode: 'full' });
 		await this.ingestFullFile(path, this.workspace);
@@ -981,6 +999,7 @@ export class Executor {
 		if (rendered.kind === 'unchanged') this.deltaMeter.windowUnchanged++;
 		this.deltaMeter.servedWindow++;
 		this.deltaMeter.savedChars += Math.max(0, slice.length - rendered.text.length);
+		this.playbookServe(real, cand.hash);
 		await this.persistMeters();
 		this.emit('view', 'info', { action: 'delta-elide', path: real, offset, limit, bytes: slice.length, patchBytes: rendered.text.length, mode: 'window' });
 		await this.ingestFullFile(real, this.workspace);
@@ -1113,6 +1132,7 @@ export class Executor {
 		if (stale) {
 			this.windowCounters.windowMissStale++;
 			this.windowCounters.windowRereadModified++;
+			this.playbookStale(real);
 			return undefined;
 		}
 		
@@ -1126,6 +1146,7 @@ export class Executor {
 		
 		
 		this.markServed(best.hash);
+		this.playbookServe(real, best.hash);
 		return {
 			hash: best.hash,
 			content: sliced,
@@ -1239,14 +1260,11 @@ export class Executor {
 		
 		if (!this.config.viewEnabled) {
 			const compressed = this.compressMessagesOnly(messages);
-			
-			
-			const changed = compressed.some((m, i) => m !== messages[i]);
-			
-			
+			const masked = this.maskOldObservations(compressed);
+			const changed = masked.some((m, i) => m !== compressed[i]) || compressed.some((m, i) => m !== messages[i]);
 			if (changed) {
 				const before = this.estimateContextTokens(messages);
-				const after = this.estimateContextTokens(compressed);
+				const after = this.estimateContextTokens(masked);
 				this.emit('view', 'info', {
 					action: 'tokens',
 					before,
@@ -1254,7 +1272,7 @@ export class Executor {
 					saved: before - after,
 					messages: messages.length,
 				});
-				return { messages: compressed };
+				return { messages: masked };
 			}
 			return undefined;
 		}
@@ -1347,7 +1365,7 @@ export class Executor {
 
 		if (result.unchanged) return undefined;
 		
-		const compressedMessages = this.compressMessagesOnly(messages);
+		const compressedMessages = this.maskOldObservations(this.compressMessagesOnly(messages));
 		const outMessages: Array<{ role: string; content: unknown }> = [...compressedMessages, { role: 'system', content: [{ type: 'text', text: view }] }];
 		
 		this.overheadTokens += estimateTokens(view, this.meter.estimateCharsPerToken);
@@ -1399,6 +1417,99 @@ export class Executor {
 		}
 		compressedMessages.push(last);
 		return compressedMessages;
+	}
+
+	private collectObservations(messages: Array<{ role: string; content: unknown }>): Array<{ msgIndex: number; blockIndex?: number; text: string; isError: boolean }> {
+		const slots: Array<{ msgIndex: number; blockIndex?: number; text: string; isError: boolean }> = [];
+		for (let i = 0; i < messages.length; i++) {
+			const m = messages[i] as { role?: string; content?: unknown; meta?: { isSummary?: boolean } };
+			if (m?.meta?.isSummary === true) continue;
+			if (m?.role === 'tool') {
+				if (typeof m.content === 'string' && m.content.length > 0) {
+					slots.push({ msgIndex: i, text: m.content, isError: false });
+				}
+				continue;
+			}
+			if (m?.role !== 'user' || !Array.isArray(m.content)) continue;
+			for (let b = 0; b < m.content.length; b++) {
+				const block = m.content[b] as { type?: string; content?: unknown; is_error?: boolean };
+				if (block?.type !== 'tool_result') continue;
+				const text = maskableBlockText(block.content);
+				if (text) slots.push({ msgIndex: i, blockIndex: b, text, isError: block.is_error === true });
+			}
+		}
+		return slots;
+	}
+
+	private maskOldObservations(messages: Array<{ role: string; content: unknown }>): Array<{ role: string; content: unknown }> {
+		if (!this.config.maskEnabled || messages.length === 0) return messages;
+		this.maskMeter.passes++;
+		const slots = this.collectObservations(messages);
+		this.maskMeter.observations += slots.length;
+		const cut = maskCut(slots.length, this.config.maskKeepLast, this.config.maskPolling);
+		if (cut <= 0) return messages;
+		const out = messages.slice();
+		const perMsg = new Map<number, Array<{ slot: (typeof slots)[number]; placeholder: string }>>();
+		let masked = 0;
+		let refs = 0;
+		let keptFirst = 0;
+		let keptSmall = 0;
+		let keptError = 0;
+		let savedChars = 0;
+		for (let i = 0; i < cut && i < slots.length; i++) {
+			const slot = slots[i];
+			if (i === 0) {
+				keptFirst++;
+				continue;
+			}
+			const verdict = shouldMask(slot.text, slot.isError, this.config.maskMinChars);
+			if (verdict === 'small') {
+				keptSmall++;
+				continue;
+			}
+			if (verdict === 'error') {
+				keptError++;
+				continue;
+			}
+			if (verdict === 'already') continue;
+			const hash = sha256Hex(slot.text);
+			const has = this.state.blobs.has(hash) && this.blobContents.has(hash);
+			if (has) refs++;
+			const placeholder = buildMaskPlaceholder(slot.text, has ? hash.slice(0, this.config.hashPrefixChars) : undefined);
+			masked++;
+			savedChars += Math.max(0, slot.text.length - placeholder.length);
+			const arr = perMsg.get(slot.msgIndex) ?? [];
+			arr.push({ slot, placeholder });
+			perMsg.set(slot.msgIndex, arr);
+		}
+		if (masked === 0) return messages;
+		for (const [msgIndex, list] of perMsg) {
+			const m = out[msgIndex] as { role: string; content: unknown };
+			if (list[0].slot.blockIndex === undefined) {
+				out[msgIndex] = { ...m, content: list[0].placeholder };
+				continue;
+			}
+			const content = Array.isArray(m.content) ? m.content.slice() : [];
+			for (const entry of list) {
+				const bi = entry.slot.blockIndex as number;
+				content[bi] = { ...(content[bi] as Record<string, unknown>), content: entry.placeholder };
+			}
+			out[msgIndex] = { ...m, content };
+		}
+		const sig = `${slots.length}|${cut}|${masked}`;
+		if (sig !== this.lastMaskSig) {
+			this.lastMaskSig = sig;
+			this.maskChangedPending = true;
+			this.maskMeter.masked += masked;
+			this.maskMeter.refs += refs;
+			this.maskMeter.keptFirst += keptFirst;
+			this.maskMeter.keptSmall += keptSmall;
+			this.maskMeter.keptError += keptError;
+			this.maskMeter.savedChars += savedChars;
+			this.emit('view', 'info', { action: 'mask', masked, observations: slots.length, cut, saved: savedChars, turn: this.turnCount });
+			this.serialized(() => this.persistMeters()).catch(() => {});
+		}
+		return out;
 	}
 
 	
@@ -2009,6 +2120,7 @@ export class Executor {
 				const delta = await this.tryServeDeltaFull(realKey, key);
 				if (delta) return delta;
 			}
+			if (toolName === 'read_file') this.playbookStale(meta.realPath ?? meta.filePath);
 			this.emit('store', 'info', { action: 'tool-hit', tool: toolName, key: redact(key).text, bytes: content.length, stale: true, reason: 'stale-not-served', toolHit: false, hitReason: 'stale' });
 			this.behavior.readsWithoutPriorRecall++;
 			return undefined;
@@ -2022,6 +2134,7 @@ export class Executor {
 		
 		
 		this.markServed(best.hash);
+		this.playbookServe(meta.realPath ?? meta.filePath, best.hash);
 		return {
 			hash: best.hash,
 			content,
@@ -2050,18 +2163,27 @@ export class Executor {
 		if (this.usages.length > 500) this.usages.shift();
 		this.lastContextTokens = sample.inputTokens;
 		if (usage.model) this.currentModel = usage.model;
-		
-		
-		
+		const cacheTotal = sample.inputTokens + sample.cacheRead;
+		const cacheRatio = cacheTotal > 0 ? sample.cacheRead / cacheTotal : null;
+		if (this.maskChangedPending && cacheRatio !== null && this.lastRequestCacheRatio !== null) {
+			const drop = this.lastRequestCacheRatio - cacheRatio;
+			if (drop > 0.15) {
+				this.maskMeter.cacheDips++;
+				this.emit('view', 'warn', { action: 'mask-cache-dip', from: Number(this.lastRequestCacheRatio.toFixed(3)), to: Number(cacheRatio.toFixed(3)), drop: Number(drop.toFixed(3)) });
+			}
+		}
+		this.maskChangedPending = false;
+		if (cacheRatio !== null) this.lastRequestCacheRatio = cacheRatio;
 		if (this.lastCalibChars > 0 && sample.inputTokens > 0) {
 			this.meter = calibrateEstimate(this.meter, { actualChars: this.lastCalibChars, actualTokens: sample.inputTokens });
 		}
-		this.emit('usage', 'debug', { action: 'request', ...sample, model: usage.model });
+		this.emit('usage', 'info', { action: 'request', ...sample, model: usage.model });
 	}
 
 	
 
 	async onTurnEnd(): Promise<void> {
+		this.turnCount++;
 		for (const layer of Object.keys(this.breakers)) {
 			this.breakers[layer] = advanceTurn(this.breakers[layer], this.config.breakerHalfOpenTurns);
 		}
@@ -2075,6 +2197,10 @@ export class Executor {
 		
 		
 		await this.flushCheckpoint();
+		if (this.playbookDirty) {
+			this.playbookDirty = false;
+			await this.persistMeters();
+		}
 		await this.log.flush();
 	}
 
@@ -2100,6 +2226,7 @@ export class Executor {
 
 	private bumpEpoch(): void {
 		this.compactionEpoch++;
+		this.turnAtEpoch = this.turnCount;
 	}
 
 	
@@ -2147,6 +2274,7 @@ export class Executor {
 					: 'No active plan recorded.',
 				'Current Phase': this.config.enabled ? 'compression active (digest + prose)' : 'disabled',
 				'Editing Files': [...this.activeFiles.entries.keys()].join(', ') || 'None mentioned in this session.',
+				'Project Playbook': renderPlaybook(this.playbook, 8).join('\n') || '(empty)',
 				'Session Decisions': `recalls=${this.snapshot.recalls}, relevant=${this.snapshot.recallAppropriate}, errors=${this.snapshot.errors}`,
 				'Store': `${storeBlobs} blobs · ${storeBytes} bytes (content-addressable, recall via deepshrink_recall)`,
 				'Usage': `input tokens=${this.snapshot.totalInputTokens}, output=${this.snapshot.totalOutputTokens}, cache read=${this.snapshot.cacheReadTokens}`,
@@ -2185,12 +2313,27 @@ export class Executor {
 	}
 
 	private async persistMeters(): Promise<void> {
+		this.playbookDirty = false;
 		await this.deps.store.saveMetrics({
 			windowCounters: { ...this.windowCounters },
 			recallMeter: { ...this.recallMeter },
 			fidelityMeter: { ...this.fidelityMeter },
 			deltaMeter: { ...this.deltaMeter },
+			maskMeter: { ...this.maskMeter },
+			playbook: this.playbook.entries,
 		});
+	}
+
+	private playbookServe(path: string | undefined, hash: string): void {
+		if (!this.config.playbookEnabled || !path) return;
+		this.playbook = touchServe(this.playbook, path, hash.slice(0, this.config.hashPrefixChars), Date.now(), this.config.playbookMaxEntries);
+		this.playbookDirty = true;
+	}
+
+	private playbookStale(path: string | undefined): void {
+		if (!this.config.playbookEnabled || !path) return;
+		this.playbook = touchStale(this.playbook, path, Date.now());
+		this.playbookDirty = true;
 	}
 
 	private async enforceStoreCap(): Promise<Set<string>> {
@@ -2331,6 +2474,115 @@ export class Executor {
 		});
 	}
 
+	contextPressure(): PressureReading & { tokens: number; growthPerTurn: number; cachePct: number; turnsSinceCompaction: number; maskedChars: number } {
+		const samples = this.usages.slice(-10);
+		let growth = 0;
+		if (samples.length >= 2) {
+			let sum = 0;
+			let n = 0;
+			for (let i = 1; i < samples.length; i++) {
+				sum += samples[i].inputTokens - samples[i - 1].inputTokens;
+				n++;
+			}
+			growth = n > 0 ? Math.round(sum / n) : 0;
+		}
+		let cacheRatio: number | null = null;
+		if (samples.length > 0) {
+			const total = samples.reduce((a, u) => a + u.inputTokens + u.cacheRead, 0);
+			if (total > 0) cacheRatio = samples.reduce((a, u) => a + u.cacheRead, 0) / total;
+		}
+		const turnsSinceCompaction = Math.max(0, this.turnCount - this.turnAtEpoch);
+		const reading = computePressure({
+			tokens: this.lastContextTokens,
+			growthPerTurn: growth,
+			cacheHitRatio: cacheRatio,
+			turnsSinceCompaction,
+			maskedChars: this.maskMeter.savedChars,
+		});
+		return {
+			...reading,
+			tokens: this.lastContextTokens,
+			growthPerTurn: growth,
+			cachePct: cacheRatio === null ? -1 : Math.round(cacheRatio * 100),
+			turnsSinceCompaction,
+			maskedChars: this.maskMeter.savedChars,
+		};
+	}
+
+	async symbol(name: string, opts: { path?: string; limit?: number } = {}): Promise<{
+		hits: Array<{ ref: string; path?: string; kind: string; startLine: number; endLine: number; text: string }>;
+		stale: Array<{ ref: string; path?: string; reason: string }>;
+		mentions: number;
+	}> {
+		const limit = Math.min(5, Math.max(1, opts.limit ?? 1));
+		const wants = name.trim();
+		const result: {
+			hits: Array<{ ref: string; path?: string; kind: string; startLine: number; endLine: number; text: string }>;
+			stale: Array<{ ref: string; path?: string; reason: string }>;
+			mentions: number;
+		} = { hits: [], stale: [], mentions: 0 };
+		if (!wants) return result;
+		const ws = this.workspace;
+		const candidates: Array<{ hash: string; meta: BlobMeta; content: string }> = [];
+		for (const [hash, meta] of this.state.blobs) {
+			if (meta.workspace && meta.workspace !== ws) continue;
+			const content = this.blobContents.get(hash);
+			if (content === undefined) continue;
+			const p = meta.realPath ?? meta.filePath;
+			if (opts.path && !(p ?? '').includes(opts.path)) continue;
+			if (!content.includes(wants)) continue;
+			candidates.push({ hash, meta, content });
+		}
+		const fresh: typeof candidates = [];
+		for (const c of candidates) {
+			const p = c.meta.realPath ?? c.meta.filePath;
+			if (p && c.meta.fileMtime !== undefined && c.meta.fileSize !== undefined) {
+				try {
+					const st = statSync(p);
+					if (st.mtimeMs !== c.meta.fileMtime || st.size !== c.meta.fileSize) {
+						result.stale.push({ ref: `[blob:${c.hash.slice(0, this.config.hashPrefixChars)}]`, path: p, reason: 'file modified - re-read the source' });
+						this.playbookStale(p);
+						continue;
+					}
+				} catch {
+					result.stale.push({ ref: `[blob:${c.hash.slice(0, this.config.hashPrefixChars)}]`, path: p, reason: 'file missing' });
+					this.playbookStale(p);
+					continue;
+				}
+			}
+			fresh.push(c);
+		}
+		result.mentions = fresh.length;
+		fresh.sort((a, b) => (b.meta.lastRef || 0) - (a.meta.lastRef || 0));
+		let servedHash: string | undefined;
+		let servedPath: string | undefined;
+		for (const c of fresh) {
+			const m = extractSymbol(c.content, wants);
+			if (!m) continue;
+			if (result.hits.length >= limit) break;
+			servedHash = c.hash;
+			servedPath = c.meta.realPath ?? c.meta.filePath;
+			result.hits.push({
+				ref: `[blob:${c.hash.slice(0, this.config.hashPrefixChars)}:${c.content.length}]`,
+				path: c.meta.realPath ?? c.meta.filePath,
+				kind: m.kind,
+				startLine: m.startLine,
+				endLine: m.endLine,
+				text: m.text,
+			});
+		}
+		if (servedHash !== undefined) {
+			this.markServed(servedHash);
+			this.playbookServe(servedPath, servedHash);
+		}
+		this.emit('view', 'info', { action: 'symbol', name: wants, hits: result.hits.length, stale: result.stale.length, mentions: result.mentions });
+		return result;
+	}
+
+	systemHint(): string {
+		return 'DeepSkrin store: deepshrink_recall(query) serves stored tool outputs; deepshrink_symbol(name) serves one definition (function, class, struct) with its body. Prefer both over re-reading or grepping whole files.';
+	}
+
 	
 
 
@@ -2369,6 +2621,13 @@ export class Executor {
 			`net gain: ${s.netGainTokens >= 0 ? '+' : ''}${Math.round(s.netGainTokens)} tokens (overhead ${Math.round(s.overheadTokens)})`,
 			`window: served ${s.windowServed}/${s.windowedRead} · miss(no-blob ${s.windowMissNoBlob}, stale ${s.windowMissStale}, oob ${s.windowMissOutOfBounds}) · reread-modified ${s.windowRereadModified}`,
 			`delta: ${this.deltaMeter.servedFull} full · ${this.deltaMeter.servedWindow} window (${this.deltaMeter.windowUnchanged} unchanged-range) · saved ${this.deltaMeter.savedChars} chars · misses(no-prior ${this.deltaMeter.noPrior}, stub-unsafe ${this.deltaMeter.notStubSafe}, ratio ${this.deltaMeter.ratioTooBig}, oversize ${this.deltaMeter.oversize}, patch ${this.deltaMeter.patchTooBig}, window ${this.deltaMeter.windowFailOpen})`,
+			`mask: ${this.maskMeter.masked} elided · saved ${this.maskMeter.savedChars} chars · refs ${this.maskMeter.refs} · kept(first ${this.maskMeter.keptFirst}, small ${this.maskMeter.keptSmall}, error ${this.maskMeter.keptError}) · passes ${this.maskMeter.passes} · cache dips ${this.maskMeter.cacheDips}`,
+			(() => {
+				const p = this.contextPressure();
+				const growth = `${p.growthPerTurn >= 0 ? '+' : ''}${p.growthPerTurn}`;
+				const cache = p.cachePct < 0 ? 'n/a' : `${p.cachePct}%`;
+				return `pressure: ${p.level.toUpperCase()} (score ${p.score}) · ${p.tokens} tok · ${growth}/turn · cache ${cache} · ${p.turnsSinceCompaction} turns since compaction · ${p.reason} — ${p.advice}`;
+			})(),
 			`cost: $${s.costUsd.toFixed(2)} · model: ${this.currentModel || 'n/a'}`,
 		];
 		return lines.join('\n');
@@ -2392,6 +2651,21 @@ export class Executor {
 			`tokens in: ${s.totalInputTokens} · out: ${s.totalOutputTokens} · cache read: ${s.totalCacheRead}`,
 			`cost: $${s.costUsd.toFixed(2)} (in $${s.costInputUsd.toFixed(2)} · out $${s.costOutputUsd.toFixed(2)} · cache $${s.costCacheUsd.toFixed(2)})${s.costUsd === 0 && s.totalInputTokens === 0 ? ' — no usage yet' : ''}`,
 		];
+		return lines.join('\n');
+	}
+
+	async cmdPlaybook(arg?: string): Promise<string> {
+		if ((arg ?? '').trim() === 'reset') {
+			this.playbook = emptyPlaybook();
+			this.playbookDirty = true;
+			await this.persistMeters();
+			return 'playbook cleared.';
+		}
+		const lines = [`entries: ${this.playbook.entries.length} · cap ${this.config.playbookMaxEntries}`, ''];
+		const rendered = renderPlaybook(this.playbook, this.config.playbookMaxEntries);
+		if (rendered.length === 0) lines.push('(empty - serve or re-read files to build it)');
+		else lines.push(...rendered);
+		lines.push('', 'served = fresh serves · stale = refusals that told you to re-read (injected at compaction)');
 		return lines.join('\n');
 	}
 
@@ -2501,6 +2775,7 @@ export class Executor {
 			'  /deepshrink            master menu',
 			'  /deepshrink status     session + store state',
 			'  /deepshrink stats      efficiency, break-even, cache hit',
+			'  /deepshrink playbook   project playbook (served/stale per file; "reset" clears)',
 			'  /deepshrink recall <q> query the store (regex)',
 			'  /deepshrink store      blobs, GC, sessions',
 			'  /deepshrink logs       log info',
@@ -2517,6 +2792,11 @@ export class Executor {
 			'',
 			'RECALL AS TOOL',
 			'  deepshrink_recall(query) — model calls it; output bypasses ingestion',
+			'  deepshrink_symbol(name) — one definition (fn/class/…) with body + line range',
+			'',
+			'CONTEXT CONTROL',
+			'  mask      old observations → recoverable placeholders (cache-safe cut, config.mask*)',
+			'  pressure  deterministic reading: growth/turn, cache ratio, turns since compaction',
 			'',
 			'GUARD',
 			'  ON by default — injects a structured state summary on compaction (config.compactGuard)',
@@ -2641,6 +2921,29 @@ function extractText(content: unknown): string {
 		if (typeof t === 'string') return t;
 	}
 	return '';
+}
+
+function maskableBlockText(content: unknown): string | undefined {
+	if (typeof content === 'string') return content;
+	if (Array.isArray(content)) {
+		let out = '';
+		for (const b of content) {
+			if (typeof b === 'string') {
+				out += b;
+				continue;
+			}
+			if (b && typeof b === 'object') {
+				const t = (b as { text?: unknown }).text;
+				if (typeof t === 'string') {
+					out += t;
+					continue;
+				}
+			}
+			return undefined;
+		}
+		return out;
+	}
+	return undefined;
 }
 
 

@@ -53,6 +53,14 @@ export interface DeepSkrinConfig {
 	
 	
 	viewEnabled: boolean;
+
+	maskEnabled: boolean;
+	maskKeepLast: number;
+	maskPolling: number;
+	maskMinChars: number;
+
+	playbookEnabled: boolean;
+	playbookMaxEntries: number;
 }
 
 export const DEFAULT_CONFIG: DeepSkrinConfig = {
@@ -96,6 +104,12 @@ export const DEFAULT_CONFIG: DeepSkrinConfig = {
 	compressTargetRatio: 0.65,
 	language: 'auto',
 	viewEnabled: false,
+	maskEnabled: true,
+	maskKeepLast: 8,
+	maskPolling: 4,
+	maskMinChars: 500,
+	playbookEnabled: true,
+	playbookMaxEntries: 24,
 };
 
 export function mergeConfig(partial: Partial<DeepSkrinConfig> | null | undefined): DeepSkrinConfig {

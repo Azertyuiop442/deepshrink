@@ -10,6 +10,7 @@ export const STATE_SECTIONS = [
 	'Worker Topology',
 	'Skills Invoked',
 	'Editing Files',
+	'Project Playbook',
 	'Failed Attempts',
 	'Recovery Notes',
 ] as const;

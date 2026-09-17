@@ -9,7 +9,7 @@ import { EventLog } from '../runtime/log.ts';
 import { DiskStore, SessionRegistry } from '../runtime/store.ts';
 import { asciiPanel, centerBox, flexoki } from '../runtime/ui.ts';
 import { HAND_PRICING, PricingCache, fetchCCPricing, fetchOpenRouterPricing } from '../core/pricing.ts';
-import { isDashboardLive, pushModals, clearModals, resetBridgeOnStartup, startPickupWatcher, pushEnabled, pushProgress, type BridgeModal } from '../runtime/bridge.ts';
+import { isDashboardLive, readBridge, writeBridge, pushModals, clearModals, resetBridgeOnStartup, startPickupWatcher, pushEnabled, pushProgress, type BridgeModal } from '../runtime/bridge.ts';
 
 const MOD_ID = 'deepshrink';
 
@@ -195,7 +195,22 @@ export default function deepshrinkMod(cmd: ModApi): void {
 	};
 	void applyDashboardConfig();
 	
-	const pushState = () => pushEnabled(MOD_ID, executor.config.enabled);
+	const pushState = () => {
+		try {
+			const p = executor.contextPressure();
+			const fmt = (n: number) => (Math.abs(n) >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+			const state = readBridge(MOD_ID);
+			state.enabled = executor.config.enabled;
+			state.segments = [{
+				text: `ctx ${fmt(p.tokens)} · ${p.growthPerTurn >= 0 ? '+' : ''}${fmt(p.growthPerTurn)}/turn · cache ${p.cachePct < 0 ? 'n/a' : `${p.cachePct}%`} · mask ${fmt(p.maskedChars)}`,
+				color: p.level === 'high' ? 'red' : p.level === 'medium' ? 'yellow' : 'green',
+				bold: p.level === 'high',
+			}];
+			writeBridge(MOD_ID, state);
+		} catch {
+			pushEnabled(MOD_ID, executor.config.enabled);
+		}
+	};
 	pushState();
 	const dashCfgTimer = setInterval(() => {
 		void applyDashboardConfig();
@@ -205,6 +220,13 @@ export default function deepshrinkMod(cmd: ModApi): void {
 
 	
 	cmd.hooks({
+		appendSystemPrompt: async () => {
+			try {
+				return executor.config.enabled ? executor.systemHint() : '';
+			} catch {
+				return '';
+			}
+		},
 		onSessionStart: async (opts?: any) => {
 			if (opts?.sessionId) executor.setSessionId(opts.sessionId);
 			await executor.onSessionStart(opts?.source ?? 'startup');
@@ -390,6 +412,42 @@ export default function deepshrinkMod(cmd: ModApi): void {
 		},
 	});
 
+	cmd.addTool({
+		schema: {
+			name: 'deepshrink_symbol',
+			description: 'Fetch ONE symbol (function, class, method, type, struct) from the local DeepSkrin store by exact name - extracted with its body, line range, file path and blob ref - instead of reading or grepping whole files. Use it FIRST when you know the symbol name; fall back to grep/read_file when it returns nothing.',
+			input_schema: {
+				type: 'object',
+				properties: {
+					name: { type: 'string', description: 'exact symbol name, e.g. "renderPane" or "session_resumable"' },
+					path: { type: 'string', description: 'optional path substring to scope the search, e.g. "src/pane.rs"' },
+					limit: { type: 'number', description: 'max definitions to return (default 1, max 5)' },
+				},
+				required: ['name'],
+			},
+		},
+		readOnly: true,
+		run: async ({ input }) => {
+			const name = typeof input.name === 'string' ? input.name.trim() : '';
+			if (!name) return { ok: false, error: 'name is required' };
+			const path = typeof input.path === 'string' && input.path.length > 0 ? input.path : undefined;
+			const limit = typeof input.limit === 'number' ? input.limit : 1;
+			const { hits, stale, mentions } = await executor.symbol(name, { path, limit });
+			if (hits.length === 0) {
+				const parts = [`No definition of "${name}" in the store.`];
+				if (mentions > 0) parts.push(`${mentions} stored file(s) mention it (no definition block matched).`);
+				if (stale.length > 0) parts.push(`Stale candidates skipped: ${stale.map(s => `${s.ref} ${s.path ?? ''} (${s.reason})`).join(' · ')}`);
+				parts.push('Fall back to grep or read_file.');
+				return { ok: true, content: [{ type: 'text', text: parts.join(' ') }] };
+			}
+			const body = hits
+				.map(h => `${h.ref} ${h.path ?? ''} L${h.startLine}-${h.endLine} (${h.kind})\n${h.text}`)
+				.join('\n\n---\n\n');
+			const suffix = stale.length > 0 ? `\n\nStale candidates skipped: ${stale.map(s => `${s.ref} (${s.reason})`).join(' · ')}` : '';
+			return { ok: true, content: [{ type: 'text', text: `${hits.length} definition(s).\n\n${body}${suffix}` }] };
+		},
+	});
+
 	
 	cmd.addCommand({
 		name: 'deepshrink',
@@ -402,6 +460,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 			switch (action) {
 				case 'status': return pushInfoModal('DEEPSKRIN STATUS', await executor.cmdStatus(), dash);
 				case 'stats': return pushInfoModal('DEEPSKRIN STATS', await executor.cmdStats(), dash);
+				case 'playbook': return pushInfoModal('DEEPSKRIN PLAYBOOK', await executor.cmdPlaybook(rest), dash);
 				case 'recall': return pushInfoModal('DEEPSKRIN RECALL', await executor.cmdRecall(rest), dash);
 				case 'store': return pushInfoModal('DEEPSKRIN STORE', await executor.cmdStore(), dash);
 				case 'logs': return pushInfoModal('DEEPSKRIN LOG', await executor.cmdLogs(), dash);
