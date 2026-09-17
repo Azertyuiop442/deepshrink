@@ -8,7 +8,7 @@ import { flexoki } from './ui.ts';
 import { makeI18n, type I18n } from '../core/i18n.ts';
 import { makeEvent, reduceSnapshot, emptySnapshot, type DeepSkrinEvent, type SessionSnapshot } from '../core/events.ts';
 import { redact } from '../core/redact.ts';
-import { ingestContent, gcStore, detectBinary, supersedeCounts, type BlobStoreState, type IngestResult } from '../core/store.ts';
+import { ingestContent, gcStore, detectBinary, supersedeCounts, type BlobStoreState, type BlobMeta, type IngestResult } from '../core/store.ts';
 import { scoreConfidence, freshnessSignals, type FreshnessSignals } from '../core/confidence.ts';
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs';
 import { digestToolOutput, type Rule } from '../core/rules.ts';
@@ -25,7 +25,7 @@ import { collapseLogLines } from '../core/logcollapse.ts';
 import { crushText } from '../core/textcrusher.ts';
 import { queryTerms, scoreRelevance, buildIdf } from '../core/relevance.ts';
 import { rrfFuse } from '../core/rrf.ts';
-import { myersDiff, summarizeDiff, formatDeltaPatch } from '../core/delta.ts';
+import { summarizeDiffTrimmed, stripLinePrefixes, formatDeltaPatch, formatWindowDelta, countTextLines, EMPTY_DELTA_METER, type DeltaMeter, type DiffSummary } from '../core/delta.ts';
 import { checkLcp } from '../core/lcp.ts';
 import { expectedCalibrationError } from '../core/ece.ts';
 import { emptyIndex, indexAdd, indexRemoveMany, indexQuery, indexPathLookup, type TermIndex } from '../core/termindex.ts';
@@ -201,6 +201,12 @@ export function dirSignature(p: string): { mtimeMs: number; size: number } | und
 
 const CHECKPOINT_MIN_INTERVAL_MS = 5000;
 
+const DELTA_MAX_RATIO = 0.4;
+const DELTA_MAX_MIDDLE_LINES = 3000;
+const DELTA_CACHE_MAX = 16;
+const DELTA_PRIOR_CANDIDATES = 5;
+const NOTE_OVERHEAD_CHARS = 260;
+
 export class Executor {
 	config: DeepSkrinConfig = { ...DEFAULT_CONFIG };
 	state: BlobStoreState = { blobs: new Map(), indexRev: 0 };
@@ -242,6 +248,9 @@ export class Executor {
 	recallMeter: RecallMeter = { recalls: 0, served: 0, droppedStale: 0, pathLookups: 0, indexSize: 0 };
 	
 	fidelityMeter: FidelityMeter = { fidelityServes: 0, stubServes: 0, recallCalls: 0, postCompactionStubs: 0, frozenRewriteRefusals: 0 };
+	
+	deltaMeter: DeltaMeter = { ...EMPTY_DELTA_METER };
+	private deltaCache = new Map<string, { mtimeMs: number; size: number; oldHash: string; summary: DiffSummary; newLines: number; totalOldLines: number }>();
 	
 
 	behavior: { readsWithoutPriorRecall: number; recallThenRead: number } = { readsWithoutPriorRecall: 0, recallThenRead: 0 };
@@ -336,6 +345,8 @@ export class Executor {
 			if (r) this.recallMeter = { recalls: 0, served: 0, droppedStale: 0, pathLookups: 0, indexSize: 0, ...r };
 			const f = m.fidelityMeter as Partial<FidelityMeter> | undefined;
 			if (f) this.fidelityMeter = { fidelityServes: 0, stubServes: 0, recallCalls: 0, postCompactionStubs: 0, frozenRewriteRefusals: 0, ...f };
+			const d = m.deltaMeter as Partial<DeltaMeter> | undefined;
+			if (d) this.deltaMeter = { ...EMPTY_DELTA_METER, ...d };
 		} catch (e) {
 			this.emit('store', 'warn', { action: 'metrics-load', error: String(e) });
 		}
@@ -560,21 +571,8 @@ export class Executor {
 						m => m.source === 'read_file' && m.fileMtime === fileMtime &&
 							((real !== undefined && m.realPath === real) || m.filePath === path),
 					);
-					if (path && real !== undefined) {
-						const prior = [...this.state.blobs.values()]
-							.filter(m => m.source === 'read_file' && (m.realPath === real || m.filePath === path))
-							.filter(m => this.blobContents.has(m.hash))
-							.sort((a, b) => (b.lastRef || 0) - (a.lastRef || 0))[0];
-						if (prior && this.isStubSafe(prior.hash)) {
-							const prevContent = this.blobContents.get(prior.hash);
-							if (prevContent !== undefined && prevContent !== redactedContent) {
-								const summary = summarizeDiff(prevContent, redactedContent);
-								if (summary.changedRatio <= 0.4) {
-									const patch = formatDeltaPatch(summary, path);
-									if (patch.length < redactedContent.length) deltaPatch = patch;
-								}
-							}
-						}
+					if (real !== undefined) {
+						deltaPatch = this.buildReReadDelta(redactedContent, path, real);
 					}
 					if (existing && this.blobContents.has(existing.hash) && this.blobContents.get(existing.hash) === redactedContent) {
 						this.reReads++;
@@ -678,13 +676,7 @@ export class Executor {
 				
 				if (res.newBlobs > 0 || res.superseded.length > 0) {
 					await this.maybeCheckpoint();
-					
-					
-					await this.deps.store.saveMetrics({
-						windowCounters: { ...this.windowCounters },
-						recallMeter: { ...this.recallMeter },
-						fidelityMeter: { ...this.fidelityMeter },
-					});
+					await this.persistMeters();
 				}
 
 				
@@ -752,6 +744,249 @@ export class Executor {
 
 
 
+	private bestFullFileCandidate(real: string): BlobMeta | undefined {
+		let best: BlobMeta | undefined;
+		for (const meta of this.state.blobs.values()) {
+			if (meta.source !== 'read_file' || meta.fullFile !== true) continue;
+			if (meta.realPath !== real) continue;
+			if (!this.blobContents.has(meta.hash)) continue;
+			const lastRef = meta.lastRef || 0;
+			const createdAt = meta.createdAt || 0;
+			if (best === undefined || lastRef > (best.lastRef || 0) || (lastRef === (best.lastRef || 0) && createdAt >= (best.createdAt || 0))) {
+				best = meta;
+			}
+		}
+		return best;
+	}
+
+	private readRawTextFile(real: string): { text: string; mtimeMs: number; size: number } | undefined {
+		try {
+			const st0 = statSync(real);
+			if (st0.size > this.config.maxFullFileBytes) return undefined;
+			if (st0.size === 0) return undefined;
+			const raw = readFileSync(real);
+			if (raw.includes(0)) return undefined;
+			let ctrl = 0;
+			for (let i = 0; i < Math.min(raw.length, 8192); i++) {
+				const c = raw[i];
+				if (c < 32 && c !== 9 && c !== 10 && c !== 13) ctrl++;
+			}
+			if (ctrl / Math.min(raw.length, 8192) > 0.1) return undefined;
+			let text: string;
+			if (raw.length >= 2 && raw[0] === 0xff && raw[1] === 0xfe) {
+				text = raw.subarray(2).toString('utf16le');
+			} else if (raw.length >= 3 && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf) {
+				text = raw.subarray(3).toString('utf8');
+			} else {
+				text = raw.toString('utf8');
+			}
+			const st1 = statSync(real);
+			if (st1.mtimeMs !== st0.mtimeMs || st1.size !== st0.size) return undefined;
+			return { text, mtimeMs: st1.mtimeMs, size: st1.size };
+		} catch {
+			return undefined;
+		}
+	}
+
+	private fileDelta(real: string, oldHash: string, oldContent: string, read: { text: string; mtimeMs: number; size: number }): DiffSummary | undefined {
+		const cached = this.deltaCache.get(real);
+		if (cached && cached.mtimeMs === read.mtimeMs && cached.size === read.size && cached.oldHash === oldHash) {
+			return cached.summary;
+		}
+		const summary = summarizeDiffTrimmed(oldContent, read.text, DELTA_MAX_MIDDLE_LINES);
+		if (summary === undefined) return undefined;
+		if (this.deltaCache.size >= DELTA_CACHE_MAX) {
+			const oldest = this.deltaCache.keys().next().value;
+			if (oldest !== undefined) this.deltaCache.delete(oldest);
+		}
+		this.deltaCache.set(real, {
+			mtimeMs: read.mtimeMs,
+			size: read.size,
+			oldHash,
+			summary,
+			newLines: countTextLines(read.text),
+			totalOldLines: countTextLines(oldContent),
+		});
+		return summary;
+	}
+
+	private buildReReadDelta(content: string, path: string, real: string): string | undefined {
+		this.deltaMeter.considered++;
+		const target = stripLinePrefixes(content);
+		const candidates = [...this.state.blobs.values()]
+			.filter(m => m.source === 'read_file' && (m.realPath === real || m.filePath === path))
+			.filter(m => this.blobContents.has(m.hash))
+			.sort((a, b) => (b.lastRef || 0) - (a.lastRef || 0))
+			.slice(0, DELTA_PRIOR_CANDIDATES);
+		if (candidates.length === 0) {
+			this.deltaMeter.noPrior++;
+			return undefined;
+		}
+		let stubUnsafe = false;
+		let ratioBlocked = false;
+		let oversize = false;
+		let patchBlocked = false;
+		for (const prior of candidates) {
+			if (!this.isStubSafe(prior.hash)) {
+				stubUnsafe = true;
+				continue;
+			}
+			const prevContent = this.blobContents.get(prior.hash);
+			if (prevContent === undefined) continue;
+			const prev = stripLinePrefixes(prevContent);
+			if (prev === target) continue;
+			const summary = summarizeDiffTrimmed(prev, target, DELTA_MAX_MIDDLE_LINES);
+			if (summary === undefined) {
+				oversize = true;
+				continue;
+			}
+			if (summary.added + summary.removed === 0) continue;
+			if (summary.changedRatio > DELTA_MAX_RATIO) {
+				ratioBlocked = true;
+				continue;
+			}
+			const unchanged = Math.max(0, countTextLines(target) - summary.added);
+			const ref = `[blob:${prior.hash.slice(0, this.config.hashPrefixChars)}]`;
+			const patch = formatDeltaPatch(summary, path, { unchanged, ref });
+			if (patch.length >= target.length) {
+				patchBlocked = true;
+				continue;
+			}
+			this.deltaMeter.servedFull++;
+			this.deltaMeter.savedChars += Math.max(0, target.length - patch.length);
+			return patch;
+		}
+		if (stubUnsafe) this.deltaMeter.notStubSafe++;
+		else if (ratioBlocked) this.deltaMeter.ratioTooBig++;
+		else if (oversize) this.deltaMeter.oversize++;
+		else if (patchBlocked) this.deltaMeter.patchTooBig++;
+		return undefined;
+	}
+
+	private async tryServeDeltaFull(real: string, path: string): Promise<{
+		hash: string;
+		content: string;
+		ref: string;
+		stale: boolean;
+		ageMs: number;
+		deltaServe: boolean;
+	} | undefined> {
+		const cand = this.bestFullFileCandidate(real);
+		this.deltaMeter.considered++;
+		if (cand === undefined) {
+			this.deltaMeter.noPrior++;
+			return undefined;
+		}
+		if (!this.isStubSafe(cand.hash)) {
+			this.deltaMeter.notStubSafe++;
+			return undefined;
+		}
+		const oldContent = this.blobContents.get(cand.hash);
+		if (oldContent === undefined) {
+			this.deltaMeter.noPrior++;
+			return undefined;
+		}
+		const read = this.readRawTextFile(real);
+		if (read === undefined) {
+			this.deltaMeter.oversize++;
+			return undefined;
+		}
+		const summary = this.fileDelta(real, cand.hash, oldContent, read);
+		if (summary === undefined) {
+			this.deltaMeter.oversize++;
+			return undefined;
+		}
+		const ref = `[blob:${cand.hash.slice(0, this.config.hashPrefixChars)}]`;
+		const full = read.text.length;
+		let patch: string;
+		if (summary.added + summary.removed === 0) {
+			patch = formatDeltaPatch(summary, path, { unchanged: countTextLines(read.text), ref });
+		} else {
+			if (summary.changedRatio > DELTA_MAX_RATIO) {
+				this.deltaMeter.ratioTooBig++;
+				return undefined;
+			}
+			const unchanged = Math.max(0, countTextLines(read.text) - summary.added);
+			patch = formatDeltaPatch(summary, path, { unchanged, ref });
+		}
+		if (patch.length >= full || patch.length > this.fidelityServeCap - NOTE_OVERHEAD_CHARS) {
+			this.deltaMeter.patchTooBig++;
+			return undefined;
+		}
+		this.deltaMeter.servedFull++;
+		this.deltaMeter.savedChars += Math.max(0, full - patch.length);
+		await this.persistMeters();
+		this.emit('view', 'info', { action: 'delta-elide', path, bytes: full, patchBytes: patch.length, mode: 'full' });
+		await this.ingestFullFile(path, this.workspace);
+		return { hash: cand.hash, content: patch, ref, stale: false, ageMs: 0, deltaServe: true };
+	}
+
+	private async tryServeWindowDelta(real: string, input: Record<string, unknown>): Promise<{
+		hash: string;
+		content: string;
+		ref: string;
+		stale: boolean;
+		ageMs: number;
+		deltaServe: boolean;
+	} | undefined> {
+		const { offset, limit } = windowParams(input);
+		if (offset <= 0 || limit <= 0) return undefined;
+		const cand = this.bestFullFileCandidate(real);
+		this.deltaMeter.considered++;
+		if (cand === undefined) {
+			this.deltaMeter.noPrior++;
+			return undefined;
+		}
+		if (!this.isStubSafe(cand.hash)) {
+			this.deltaMeter.notStubSafe++;
+			return undefined;
+		}
+		const oldContent = this.blobContents.get(cand.hash);
+		if (oldContent === undefined) {
+			this.deltaMeter.noPrior++;
+			return undefined;
+		}
+		const read = this.readRawTextFile(real);
+		if (read === undefined) {
+			this.deltaMeter.oversize++;
+			return undefined;
+		}
+		const summary = this.fileDelta(real, cand.hash, oldContent, read);
+		if (summary === undefined) {
+			this.deltaMeter.oversize++;
+			return undefined;
+		}
+		if (summary.added + summary.removed === 0) return undefined;
+		if (summary.changedRatio > DELTA_MAX_RATIO) {
+			this.deltaMeter.ratioTooBig++;
+			return undefined;
+		}
+		const totalNew = countTextLines(read.text);
+		const totalOld = countTextLines(oldContent);
+		const ref = `[blob:${cand.hash.slice(0, this.config.hashPrefixChars)}]`;
+		const rendered = formatWindowDelta(summary, real, offset, limit, totalNew, totalOld, { ref });
+		if (rendered === undefined) {
+			this.deltaMeter.windowFailOpen++;
+			return undefined;
+		}
+		const slice = formatWindow(read.text, offset, limit);
+		if (slice === null) {
+			this.deltaMeter.windowFailOpen++;
+			return undefined;
+		}
+		if (rendered.text.length + NOTE_OVERHEAD_CHARS >= slice.length || rendered.text.length > this.fidelityServeCap - NOTE_OVERHEAD_CHARS) {
+			this.deltaMeter.patchTooBig++;
+			return undefined;
+		}
+		if (rendered.kind === 'unchanged') this.deltaMeter.windowUnchanged++;
+		this.deltaMeter.servedWindow++;
+		this.deltaMeter.savedChars += Math.max(0, slice.length - rendered.text.length);
+		await this.persistMeters();
+		this.emit('view', 'info', { action: 'delta-elide', path: real, offset, limit, bytes: slice.length, patchBytes: rendered.text.length, mode: 'window' });
+		await this.ingestFullFile(real, this.workspace);
+		return { hash: cand.hash, content: rendered.text, ref, stale: false, ageMs: 0, deltaServe: true };
+	}
+
 	private async ingestFullFile(path: string, ws: string): Promise<void> {
 		try {
 			
@@ -762,50 +997,23 @@ export class Executor {
 			} catch {
 				return; 
 			}
-			const st0 = statSync(real);
-			if (st0.size > this.config.maxFullFileBytes) return;
-			if (st0.size === 0) return; 
-			const raw = readFileSync(real);
-			
-			if (raw.includes(0)) return;
-			let ctrl = 0;
-			for (let i = 0; i < Math.min(raw.length, 8192); i++) {
-				const c = raw[i];
-				if (c < 32 && c !== 9 && c !== 10 && c !== 13) ctrl++;
-			}
-			if (ctrl / Math.min(raw.length, 8192) > 0.1) return;
-			
-			let text: string;
-			if (raw.length >= 2 && raw[0] === 0xff && raw[1] === 0xfe) {
-				text = raw.subarray(2).toString('utf16le');
-			} else if (raw.length >= 3 && raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf) {
-				text = raw.subarray(3).toString('utf8');
-			} else {
-				text = raw.toString('utf8');
-			}
-			
-			const st1 = statSync(real);
-			if (st1.mtimeMs !== st0.mtimeMs || st1.size !== st0.size) return;
-			const res = ingestContent(this.state, text, this.sessionId, this.config, Date.now(), false, {
+			const read = this.readRawTextFile(real);
+			if (read === undefined) return;
+			const res = ingestContent(this.state, read.text, this.sessionId, this.config, Date.now(), false, {
 				workspace: ws,
 				source: 'read_file',
-				
-				
-				
 				filePath: path,
-				fileMtime: st1.mtimeMs,
-				fileSize: st1.size,
+				fileMtime: read.mtimeMs,
+				fileSize: read.size,
 				fullFile: true,
 				realPath: real,
 			});
 			if (res.newBlobs > 0) {
-				await this.deps.store.saveBlob(res.hash, text);
-				this.blobContents.set(res.hash, text);
-				this.indexIngest(res.hash, text, real);
-				
-				
+				await this.deps.store.saveBlob(res.hash, read.text);
+				this.blobContents.set(res.hash, read.text);
+				this.indexIngest(res.hash, read.text, real);
 				this.markServed(res.hash);
-				this.emit('store', 'debug', { action: 'full-file', hash: res.short, path: real, bytes: text.length });
+				this.emit('store', 'debug', { action: 'full-file', hash: res.short, path: real, bytes: read.text.length });
 			}
 			if (res.superseded.length > 0) {
 				const goneFullFile = new Set(res.superseded);
@@ -1582,6 +1790,7 @@ export class Executor {
 
 
 		fidelityServe?: boolean;
+		deltaServe?: boolean;
 	} | undefined> {
 		if (!this.config.enabled || !this.live) return undefined;
 		
@@ -1634,6 +1843,18 @@ export class Executor {
 			
 			const served = await this.tryServeWindowed(realKey ?? key, input);
 			if (served) return served;
+			let windowReal = realKey;
+			if (windowReal === undefined) {
+				try {
+					windowReal = realpathSync(key);
+				} catch {
+					windowReal = undefined;
+				}
+			}
+			if (windowReal !== undefined) {
+				const delta = await this.tryServeWindowDelta(windowReal, input);
+				if (delta) return delta;
+			}
 			this.behavior.readsWithoutPriorRecall++;
 			this.emit('store', 'info', { action: 'tool-hit', tool: toolName, key: redact(key).text, toolHit: false, hitReason: 'windowed-no-blob' });
 			return undefined; 
@@ -1784,6 +2005,10 @@ export class Executor {
 		}
 		const conf = scoreConfidence(freshnessSignals(meta, ws, { fileNow, shellFileNow, dirNow }, { now: Date.now() }));
 		if (conf.stale) {
+			if (toolName === 'read_file' && realKey !== undefined) {
+				const delta = await this.tryServeDeltaFull(realKey, key);
+				if (delta) return delta;
+			}
 			this.emit('store', 'info', { action: 'tool-hit', tool: toolName, key: redact(key).text, bytes: content.length, stale: true, reason: 'stale-not-served', toolHit: false, hitReason: 'stale' });
 			this.behavior.readsWithoutPriorRecall++;
 			return undefined;
@@ -1959,6 +2184,15 @@ export class Executor {
 		if (this.checkpointDirty) await this.maybeCheckpoint(true);
 	}
 
+	private async persistMeters(): Promise<void> {
+		await this.deps.store.saveMetrics({
+			windowCounters: { ...this.windowCounters },
+			recallMeter: { ...this.recallMeter },
+			fidelityMeter: { ...this.fidelityMeter },
+			deltaMeter: { ...this.deltaMeter },
+		});
+	}
+
 	private async enforceStoreCap(): Promise<Set<string>> {
 		const evicted = new Set<string>();
 		const capBytes = this.config.maxStoreBytes;
@@ -2009,7 +2243,7 @@ export class Executor {
 		if (removedHashes.size > 0) this.indexForget(removedHashes);
 		await this.maybeCheckpoint(true);
 		if (res.removed > 0) {
-			this.emit('store', 'info', { action: 'gc', blobs: res.removed });
+			this.emit('store', 'info', { action: 'gc', removed: res.removed, remaining: this.state.blobs.size });
 			this.deps.host?.notify?.(this.i18n.t('notify.gcDone', { n: res.removed }));
 		}
 		if (evicted.size > 0) this.emit('store', 'info', { action: 'evict', blobs: evicted.size });
@@ -2134,6 +2368,7 @@ export class Executor {
 			`cache hit: ${s.cacheHitRatio === null ? 'n/a (no usage yet)' : (s.cacheHitRatio * 100).toFixed(1) + '%'}`,
 			`net gain: ${s.netGainTokens >= 0 ? '+' : ''}${Math.round(s.netGainTokens)} tokens (overhead ${Math.round(s.overheadTokens)})`,
 			`window: served ${s.windowServed}/${s.windowedRead} · miss(no-blob ${s.windowMissNoBlob}, stale ${s.windowMissStale}, oob ${s.windowMissOutOfBounds}) · reread-modified ${s.windowRereadModified}`,
+			`delta: ${this.deltaMeter.servedFull} full · ${this.deltaMeter.servedWindow} window (${this.deltaMeter.windowUnchanged} unchanged-range) · saved ${this.deltaMeter.savedChars} chars · misses(no-prior ${this.deltaMeter.noPrior}, stub-unsafe ${this.deltaMeter.notStubSafe}, ratio ${this.deltaMeter.ratioTooBig}, oversize ${this.deltaMeter.oversize}, patch ${this.deltaMeter.patchTooBig}, window ${this.deltaMeter.windowFailOpen})`,
 			`cost: $${s.costUsd.toFixed(2)} · model: ${this.currentModel || 'n/a'}`,
 		];
 		return lines.join('\n');

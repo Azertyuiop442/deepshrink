@@ -250,13 +250,15 @@ export default function deepshrinkMod(cmd: ModApi): void {
 					: String(input.file_path ?? input.path ?? input.file ?? '');
 
 				const isWindowed = toolName === 'read_file' && (input.offset !== undefined || input.limit !== undefined);
-				const budget = hit.fidelityServe ? executor.fidelityServeCap : executor.config.recallBudgetChars;
+				const budget = hit.fidelityServe || hit.deltaServe ? executor.fidelityServeCap : executor.config.recallBudgetChars;
 				const content = hit.content.length <= budget
 					? hit.content
 					: hit.content.slice(0, budget) + `\n…[view trimmed to ${budget} chars — full blob ${hit.ref}]`;
-				const note = `[deepshrink] ${toolName} with this exact input was already executed before — returning stored output (${hit.content.length} chars, ${hit.ref}, ${Math.round(hit.ageMs / 1000)}s old) instead of re-running:\n${content}`;
+				const note = hit.deltaServe
+					? `[deepshrink] ${toolName} on ${key} — the file changed since your last read; returning a delta (${hit.content.length} chars, ${hit.ref}) instead of re-running:\n${content}`
+					: `[deepshrink] ${toolName} with this exact input was already executed before — returning stored output (${hit.content.length} chars, ${hit.ref}, ${Math.round(hit.ageMs / 1000)}s old) instead of re-running:\n${content}`;
 				const noteOverhead = note.length - content.length;
-				if (!hit.fidelityServe && hit.content.length <= noteOverhead) return undefined;
+				if (!hit.fidelityServe && !hit.deltaServe && hit.content.length <= noteOverhead) return undefined;
 				pendingElides.push({ tool: isWindowed ? 'window-slice' : toolName, key, ref: hit.ref, bytes: hit.content.length });
 				return {
 					input: { ...input, command: `echo ${JSON.stringify('[deepshrink elided]')}` },

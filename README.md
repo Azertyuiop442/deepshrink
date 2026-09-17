@@ -186,7 +186,12 @@ once per session via `appendCustomMessageEntry`. `compactGuard` is ON by default
 Delta serve: a re-read whose content changed is served as a Myers patch only when the
 previous version was re-served since the last compaction boundary (the same stub-safety
 gate) and the change is ≤ 40% - the new version is ingested regardless, so later reads
-serve it for real.
+serve it for real. Windowed re-reads run through the same diff: a requested range outside
+the changes becomes an unchanged marker (with the line shift when the file moved above
+it), a range containing changes renders the changed blocks plus unchanged markers, and
+the serve ships only when the replacement is strictly smaller than the slice it replaces.
+`/deepshrink status` reports delta serves and refusal reasons (no prior, stub-unsafe,
+ratio, oversize, patch, window).
 Known limit: windowed output without compaction ("seen = still in context") remains an
 unverifiable-by-hook heuristic.
 
