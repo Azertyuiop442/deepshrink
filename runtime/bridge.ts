@@ -4,7 +4,7 @@
 
 
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, readlinkSync, renameSync } from 'node:fs';
 
 
 
@@ -47,6 +47,50 @@ export interface BridgeState {
 	modals?: BridgeModal[];
 	
 	enabled?: boolean;
+	modId?: string;
+	seq?: number;
+	updatedAt?: number;
+}
+
+const TTY_PROBE = `p=$$; for i in 1 2 3 4 5; do t=$(ps -o tty= -p $p 2>/dev/null | tr -d ' '); if [ -n "$t" ] && [ "$t" != "?" ] && [ "$t" != "??" ]; then echo "$t"; exit 0; fi; p=$(ps -o ppid= -p $p 2>/dev/null | tr -d ' '); [ -z "$p" ] && break; done; exit 1`;
+
+let sequence = 0;
+let bridgeTtyName = '';
+
+export function bridgeTty(): string {
+	return bridgeTtyName;
+}
+
+export function setBridgeTty(raw: string): string {
+	const cleaned = (raw || '').trim().replace(/^\/dev\//, '').replace(/\//g, '-');
+	bridgeTtyName = /^(tty|pts|console)/i.test(cleaned) ? cleaned : '';
+	return bridgeTtyName;
+}
+
+export interface BridgeHost {
+	exec(opts: { command: string; args?: string[] }): Promise<{ stdout: string }>;
+}
+
+function ttyFromFileDescriptors(): string {
+	for (const fd of ['/dev/fd/0', '/dev/fd/1', '/dev/fd/2']) {
+		try {
+			const resolved = setBridgeTty(readlinkSync(fd));
+			if (resolved) return resolved;
+		} catch {}
+	}
+	return '';
+}
+
+export async function resolveBridgeTty(host: BridgeHost): Promise<string> {
+	if (bridgeTtyName) return bridgeTtyName;
+	const fromFd = ttyFromFileDescriptors();
+	if (fromFd) return fromFd;
+	try {
+		const result = await host.exec({ command: 'bash', args: ['-c', TTY_PROBE] });
+		return setBridgeTty(String(result?.stdout ?? ''));
+	} catch {
+		return bridgeTtyName;
+	}
 }
 
 
@@ -74,7 +118,7 @@ export function readBridge(modId: string): BridgeState {
 }
 
 
-export function writeBridge(modId: string, state: BridgeState): boolean {
+function writeBridgeFile(modId: string, state: BridgeState): boolean {
 	try {
 		mkdirSync(MODS_DATA, { recursive: true });
 		const path = `${MODS_DATA}/${modId}.json`;
@@ -85,6 +129,14 @@ export function writeBridge(modId: string, state: BridgeState): boolean {
 	} catch {
 		return false;
 	}
+}
+
+
+export function writeBridge(modId: string, state: BridgeState): boolean {
+	const stamped: BridgeState = { ...state, modId, seq: ++sequence, updatedAt: Date.now() };
+	const ok = writeBridgeFile(modId, stamped);
+	if (bridgeTtyName) writeBridgeFile(`${modId}-${bridgeTtyName}`, stamped);
+	return ok;
 }
 
 
@@ -132,10 +184,7 @@ export function pushConfirm(modId: string, id: string, title: string, banner: st
 
 
 export function resetBridgeOnStartup(modId: string, empty: BridgeState = {}): void {
-	try {
-		mkdirSync(MODS_DATA, { recursive: true });
-		writeFileSync(`${MODS_DATA}/${modId}.json`, JSON.stringify(empty, null, 2), 'utf-8');
-	} catch {}
+	writeBridge(modId, { ...empty });
 }
 
 

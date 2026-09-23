@@ -58,6 +58,10 @@ export interface DeepSkrinConfig {
 	maskKeepLast: number;
 	maskPolling: number;
 	maskMinChars: number;
+	maskMinSavingsPct: number;
+	maskPressureTokens: number;
+	maskPressurePct: number;
+	maskPerModel: Record<string, MaskModelOverride>;
 
 	playbookEnabled: boolean;
 	playbookMaxEntries: number;
@@ -108,9 +112,37 @@ export const DEFAULT_CONFIG: DeepSkrinConfig = {
 	maskKeepLast: 8,
 	maskPolling: 4,
 	maskMinChars: 500,
+	maskMinSavingsPct: 10,
+	maskPressureTokens: 0,
+	maskPressurePct: 0.7,
+	maskPerModel: {},
 	playbookEnabled: true,
 	playbookMaxEntries: 24,
 };
+
+export interface MaskModelOverride {
+	enabled?: boolean;
+	pressurePct?: number;
+	keepLast?: number;
+	polling?: number;
+}
+
+function sanitizeMaskPerModel(raw: unknown): Record<string, MaskModelOverride> {
+	const out: Record<string, MaskModelOverride> = {};
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+	for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+		const id = key.trim().toLowerCase();
+		if (!id || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+		const src = value as Record<string, unknown>;
+		const entry: MaskModelOverride = {};
+		if (typeof src.enabled === 'boolean') entry.enabled = src.enabled;
+		if (typeof src.pressurePct === 'number' && src.pressurePct > 0 && src.pressurePct <= 1) entry.pressurePct = src.pressurePct;
+		if (typeof src.keepLast === 'number' && Number.isFinite(src.keepLast) && src.keepLast >= 0) entry.keepLast = Math.floor(src.keepLast);
+		if (typeof src.polling === 'number' && Number.isFinite(src.polling) && src.polling >= 1) entry.polling = Math.floor(src.polling);
+		if (Object.keys(entry).length > 0) out[id] = entry;
+	}
+	return out;
+}
 
 export function mergeConfig(partial: Partial<DeepSkrinConfig> | null | undefined): DeepSkrinConfig {
 	if (!partial || typeof partial !== 'object') return { ...DEFAULT_CONFIG };
@@ -129,6 +161,7 @@ export function mergeConfig(partial: Partial<DeepSkrinConfig> | null | undefined
 	if (Array.isArray(partial.neverElidePrefixes) && partial.neverElidePrefixes.every(v => typeof v === 'string')) {
 		out.neverElidePrefixes = partial.neverElidePrefixes;
 	}
+	out.maskPerModel = sanitizeMaskPerModel(partial.maskPerModel);
 	return out;
 }
 

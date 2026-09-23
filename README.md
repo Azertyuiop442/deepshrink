@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://shieldcn.dev/badge/deepshrink-v1.0.0-24837b.svg?variant=outline" alt="DeepSkrin v1.0.0"/></a>
+  <a href="LICENSE"><img src="https://shieldcn.dev/badge/deepshrink-v1.1.0-24837b.svg?variant=outline" alt="DeepSkrin v1.1.0"/></a>
   <a href="LICENSE"><img src="https://shieldcn.dev/badge/license-AGPL--3.0-d14d41.svg?variant=outline" alt="License"/></a>
   <img src="https://shieldcn.dev/badge/savings-up--to-90%25-879a39.svg?variant=outline" alt="Token savings"/>
   <img src="https://shieldcn.dev/badge/runtime-100%25_local-8b7ec8.svg?variant=outline" alt="Local"/>
@@ -184,6 +184,11 @@ elision resumes. Telemetry: `fidelityServes`, `stubServes`, `postCompactionStubs
 (must stay ~0), `recallCalls` in `metrics.json` and `/deepshrink status`.
 Bootstrap note: numeric-only (~400 chars, filename allowlist, no raw content), injected
 once per session via `appendCustomMessageEntry`. `compactGuard` is ON by default.
+Shrink detection: the same epoch guard also arms deterministically when the incoming
+transcript shrinks (a drop of more than 20k chars and more than 10% versus the largest
+size seen this session), so harness trim tiers, the trim fallback of the default compact
+mode, and rewind boundaries are covered even when no compaction event fires
+(`epoch-bump` with `source: shrink`).
 Delta serve: a re-read whose content changed is served as a Myers patch only when the
 previous version was re-served since the last compaction boundary (the same stub-safety
 gate) and the change is ≤ 40% - the new version is ingested regardless, so later reads
@@ -206,11 +211,18 @@ freshness proof - a file that changed on disk is never served as a definition, i
 reported as a stale candidate.
 Context pressure: `/deepshrink status` adds a deterministic reading (growth per turn,
 cache ratio, turns since compaction) with advice when the context needs attention; the
-dashboard bridge exposes the same signal as a live segment.
+dashboard bridge exposes a live segment with the growth per turn and the masked volume
+(the absolute context and cache stay with your cost tool).
 Awareness: while enabled, the harness re-injects a one-line hint (appendSystemPrompt) on
 every request, so the store tools stay known even after a compaction erased earlier
 mentions; elision stubs and masked placeholders repeat the same pointers exactly where
 the model is about to re-read.
+Cache-prefix identity (local, no server data): every turn the executor hashes the frozen
+region - everything up to the last mask placeholder - and compares it with the previous
+turn's hash. The region must stay byte-identical; it may only extend when the cut moves
+(one sanctioned break per polling boundary, counted as `prefix cuts`). Any other change
+raises a `prefix-rewrite` warning and increments `frozenRewriteRefusals`, so a cache break
+is attributed locally instead of being guessed from usage ratios.
 Project playbook (deterministic): the mod keeps a small per-project list of
 the files it actually serves - a fresh serve counts as helpful, a refusal that told you
 to re-read counts as harmful - and injects the top entries into the compaction state

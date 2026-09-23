@@ -92,7 +92,7 @@ export function computeStats(input: SessionStatsInput): SessionStats {
 	const totalInput = input.usages.reduce((a, u) => a + u.inputTokens, 0);
 	const totalOutput = input.usages.reduce((a, u) => a + u.outputTokens, 0);
 	const totalCacheRead = input.usages.reduce((a, u) => a + u.cacheRead, 0);
-	const cacheHitRatio = totalInput + totalCacheRead > 0 ? totalCacheRead / (totalInput + totalCacheRead) : null;
+	const cacheHitRatio = totalInput > 0 ? totalCacheRead / totalInput : null;
 	const savedTokens = input.ruleSaves;
 	
 	

@@ -84,8 +84,19 @@ const DEFAULT_RULES: Rule[] = [
 		},
 	},
 	{
+		name: 'diagnostics-strip',
+		matchTool: /^get_diagnostics$/,
+		action: {
+			kind: 'strip-lines',
+			patterns: [
+				/^\s*L?\d+:\d+\s+(information|hint|info)\b/i,
+				/^\s*(no (diagnostics|problems|issues|errors)|0 (errors?|problems?|diagnostics))\b/i,
+			],
+			minChars: 300,
+		},
+	},
+	{
 		name: 'install-summary',
-		
 		matchTool: /^shell_command$/,
 		matchCommand: /^(npm|bun|pnpm|yarn|pip|poetry|pip3|uv)\s+(install|i|ci|add|lock|update|sync|pull)\b/,
 		action: {

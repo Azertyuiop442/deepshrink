@@ -13,17 +13,17 @@ export interface BaseEvent {
 }
 
 export type DeepSkrinEvent = BaseEvent & (
-	| { type: 'store'; action: 'ingest' | 'recall' | 'gc' | 'rebuild' | 'save'; hash?: string; bytes?: number; blobs?: number; query?: string; bypass?: boolean; miss?: boolean; score?: number; followedBy?: string; toolHit?: boolean; hitReason?: string; cause?: { edited?: number; reIngestSameHash?: number } }
-	| { type: 'view'; action: 'transform' | 'unchanged' | 'elide' | 'binary' | 'skeleton' | 'toc' | 'reread-elide'; bytes?: number; tokens?: number; kind?: string; lines?: number; entries?: number; path?: string; precededByRecall?: boolean; compacted?: boolean; servedContent?: boolean }
+	| { type: 'store'; action: 'ingest' | 'recall' | 'gc' | 'rebuild' | 'save' | 'invalidate' | 'invalidate-search' | 'skip-read-notice' | 'supersede-delete' | 'superseded' | 'full-file' | 'fullfile-supersede-delete' | 'full-file-ingest' | 'window-serve' | 'tool-hit' | 'evict' | 'purge' | 'purge-workspace' | 'purge-resync' | 'metrics-load'; hash?: string; bytes?: number; blobs?: number; removed?: number; remaining?: number; events?: number; workspace?: string; tool?: string; key?: string; pattern?: string; candidates?: number; edited?: number; path?: string; error?: string; enabled?: boolean; query?: string; bypass?: boolean; miss?: boolean; score?: number; followedBy?: string; toolHit?: boolean; hitReason?: string; reason?: string; stale?: boolean; cause?: { edited?: number; reIngestSameHash?: number } }
+	| { type: 'view'; action: 'transform' | 'unchanged' | 'elide' | 'binary' | 'skeleton' | 'toc' | 'reread-elide' | 'delta-elide' | 'smart' | 'mask' | 'tokens' | 'budget' | 'compress' | 'prefix-rewrite' | 'mask-cache-dip' | 'symbol' | 'frozen-lcp-ok'; bytes?: number; tokens?: number; kind?: string; lines?: number; entries?: number; path?: string; tool?: string; hash?: string; served?: number; saved?: number; masked?: number; observations?: number; cut?: number; turn?: number; patchBytes?: number; mode?: string; role?: string; cause?: string; from?: number; to?: number; atMessage?: number; lcpChars?: number; ratio?: number; name?: string; hits?: number; mentions?: number; trimmedBytes?: number; before?: number; after?: number; messages?: number; precededByRecall?: boolean; compacted?: boolean; servedContent?: boolean }
 	| { type: 'meter'; action: 'estimate' | 'real' | 'warn' | 'clamp'; contextTokens?: number; growthPerTurn?: number; headroomPct?: number; estimateChars?: number; actualChars?: number }
 	| { type: 'breaker'; layer: string; state: 'closed' | 'open' | 'half-open' | 'probe' | 'reset' }
-	| { type: 'guard'; action: 'on' | 'off' | 'state' | 'compacted' | 'skip'; reason?: string }
+	| { type: 'guard'; action: 'on' | 'off' | 'state' | 'compacted' | 'skip' | 'epoch-bump'; reason?: string; epoch?: number; source?: string; from?: number; to?: number }
 	| { type: 'redact'; action: 'apply'; kind?: string; count?: number }
 	| { type: 'decide'; action: 'recall' | 'norecall' | 'bypass'; reason?: string; query?: string }
 	| { type: 'hook'; action: string; ms: number; name?: string }
 	| { type: 'error'; action: string; message?: string }
-	| { type: 'config'; action: 'load' | 'save' | 'reset' }
-	| { type: 'usage'; action: 'request'; inputTokens?: number; outputTokens?: number; cacheRead?: number; model?: string }
+	| { type: 'config'; action: 'load' | 'save' | 'reset'; enabled?: boolean; guard?: boolean; digestEnabled?: boolean }
+	| { type: 'usage'; action: 'request' | 'context-warn'; inputTokens?: number; outputTokens?: number; cacheRead?: number; model?: string; pct?: number }
 	| { type: 'session'; action: 'start' | 'end' | 'locale'; locale?: string }
 	| { type: 'index'; action: 'build'; size?: number; ms?: number }
 );

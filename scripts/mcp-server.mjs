@@ -4,8 +4,14 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { extractSymbol } from "../core/symbol.ts";
 
-const DEFAULT_DIR = join(homedir(), ".commandcode", "mods", "deepshrink", "data", "deepshrink");
-const DATA_DIR = process.env.DEEPSHRINK_DATA_DIR || DEFAULT_DIR;
+function resolveDataDir() {
+	if (process.env.DEEPSHRINK_DATA_DIR) return process.env.DEEPSHRINK_DATA_DIR;
+	const neutral = join(homedir(), ".deepshrink");
+	if (existsSync(neutral)) return neutral;
+	return join(homedir(), ".commandcode", "mods", "deepshrink", "data", "deepshrink");
+}
+
+const DATA_DIR = resolveDataDir();
 const WORKSPACE = process.env.DEEPSHRINK_WORKSPACE || process.cwd();
 const SNIPPET_CHARS = 2000;
 const FULL_CHARS = 24000;
@@ -140,8 +146,8 @@ function symbol(input) {
 const TOOLS = [
 	{
 		name: "deepshrink_recall",
-		description:
-			"Search a local, read-only cache of tool outputs (file reads, greps, commands) shared across agents on this machine. Call it before re-reading or re-running something. Returns snippets with a confidence ref; STALE hits are never served as content.",
+		 description:
+			"Optionally search a local, read-only cache of tool outputs (file reads, greps, commands) shared across agents on this machine for a specific repeated lookup. Returns snippets with a confidence ref; STALE hits are never served as content. Do not use it to inspect this plugin or its own output.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -154,8 +160,8 @@ const TOOLS = [
 	},
 	{
 		name: "deepshrink_symbol",
-		description:
-			"Fetch one named definition (function, class, struct, ...) with its body and line range from the same local store, instead of reading or grepping whole files. Files that changed on disk are reported as stale, never served.",
+		 description:
+			"Optionally fetch one named definition (function, class, struct, ...) from the local cache when it can answer a specific repeated lookup. Files that changed on disk are reported as stale, never served. Do not use it to inspect this plugin or its own instructions.",
 		inputSchema: {
 			type: "object",
 			properties: {

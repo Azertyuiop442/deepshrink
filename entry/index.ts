@@ -9,7 +9,7 @@ import { EventLog } from '../runtime/log.ts';
 import { DiskStore, SessionRegistry } from '../runtime/store.ts';
 import { asciiPanel, centerBox, flexoki } from '../runtime/ui.ts';
 import { HAND_PRICING, PricingCache, fetchCCPricing, fetchOpenRouterPricing } from '../core/pricing.ts';
-import { isDashboardLive, readBridge, writeBridge, pushModals, clearModals, resetBridgeOnStartup, startPickupWatcher, pushEnabled, pushProgress, type BridgeModal } from '../runtime/bridge.ts';
+import { isDashboardLive, readBridge, writeBridge, pushModals, clearModals, resetBridgeOnStartup, startPickupWatcher, pushEnabled, pushProgress, resolveBridgeTty, type BridgeModal } from '../runtime/bridge.ts';
 
 const MOD_ID = 'deepshrink';
 
@@ -59,7 +59,13 @@ function badge(enabled: boolean): string {
 import type { LogLevel } from '../core/config.ts';
 import { existsSync } from 'node:fs';
 
-const getDir = () => process.env.DEEPSHRINK_DATA_DIR || `${process.env.HOME ?? ''}/.commandcode/mods/deepshrink/data/deepshrink`;
+const getDir = () => {
+	if (process.env.DEEPSHRINK_DATA_DIR) return process.env.DEEPSHRINK_DATA_DIR;
+	const home = process.env.HOME ?? '';
+	const neutral = `${home}/.deepshrink`;
+	if (existsSync(neutral)) return neutral;
+	return `${home}/.commandcode/mods/deepshrink/data/deepshrink`;
+};
 
 export default function deepshrinkMod(cmd: ModApi): void {
 	const dir = getDir();
@@ -201,17 +207,24 @@ export default function deepshrinkMod(cmd: ModApi): void {
 			const fmt = (n: number) => (Math.abs(n) >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 			const state = readBridge(MOD_ID);
 			state.enabled = executor.config.enabled;
-			state.segments = [{
-				text: `ctx ${fmt(p.tokens)} · ${p.growthPerTurn >= 0 ? '+' : ''}${fmt(p.growthPerTurn)}/turn · cache ${p.cachePct < 0 ? 'n/a' : `${p.cachePct}%`} · mask ${fmt(p.maskedChars)}`,
-				color: p.level === 'high' ? 'red' : p.level === 'medium' ? 'yellow' : 'green',
-				bold: p.level === 'high',
-			}];
+			if (!state.enabled || p.tokens === 0) {
+				state.segments = [];
+			} else {
+				state.segments = [{
+					text: `${p.growthPerTurn >= 0 ? '+' : ''}${fmt(p.growthPerTurn)}/turn · mask ${fmt(p.maskedChars)}`,
+					color: p.level === 'high' ? 'red' : p.level === 'medium' ? 'yellow' : 'subtext0',
+					bold: p.level === 'high',
+				}];
+			}
 			writeBridge(MOD_ID, state);
 		} catch {
 			pushEnabled(MOD_ID, executor.config.enabled);
 		}
 	};
 	pushState();
+	void resolveBridgeTty(cmd).then(() => {
+		pushState();
+	});
 	const dashCfgTimer = setInterval(() => {
 		void applyDashboardConfig();
 		pushState();
@@ -219,13 +232,12 @@ export default function deepshrinkMod(cmd: ModApi): void {
 	dashCfgTimer.unref?.();
 
 	
+	let hintEmitted = false;
 	cmd.hooks({
 		appendSystemPrompt: async () => {
-			try {
-				return executor.config.enabled ? executor.systemHint() : '';
-			} catch {
-				return '';
-			}
+			if (hintEmitted || !executor.config.enabled) return '';
+			hintEmitted = true;
+			return executor.systemHint();
 		},
 		onSessionStart: async (opts?: any) => {
 			if (opts?.sessionId) executor.setSessionId(opts.sessionId);
@@ -260,6 +272,18 @@ export default function deepshrinkMod(cmd: ModApi): void {
 			try {
 				const toolName = String(opts?.toolName ?? '');
 				const input = opts?.input ?? {};
+				if (toolName === 'agent') {
+					const sub = typeof input?.subagent_type === 'string' ? input.subagent_type.toLowerCase() : '';
+					if (sub === 'explore') {
+						return {
+							input: { ...input, subagent_type: 'explore-shrink' },
+						};
+					}
+					return undefined;
+				}
+				if (toolName === 'read_directory' || toolName === 'glob' || toolName === 'list_dir' || toolName === 'find_by_name') {
+					return undefined;
+				}
 				const hit = await executor.toolHit(toolName, input);
 				if (!hit) return undefined;
 				if (hit.stale) return undefined; 
@@ -275,17 +299,20 @@ export default function deepshrinkMod(cmd: ModApi): void {
 				const budget = hit.fidelityServe || hit.deltaServe ? executor.fidelityServeCap : executor.config.recallBudgetChars;
 				const content = hit.content.length <= budget
 					? hit.content
-					: hit.content.slice(0, budget) + `\n…[view trimmed to ${budget} chars — full blob ${hit.ref}]`;
+					: hit.content.slice(0, budget) + `\n…[view trimmed to ${budget} chars - full blob ${hit.ref}]`;
 				const note = hit.deltaServe
-					? `[deepshrink] ${toolName} on ${key} — the file changed since your last read; returning a delta (${hit.content.length} chars, ${hit.ref}) instead of re-running:\n${content}`
-					: `[deepshrink] ${toolName} with this exact input was already executed before — returning stored output (${hit.content.length} chars, ${hit.ref}, ${Math.round(hit.ageMs / 1000)}s old) instead of re-running:\n${content}`;
+					? `[deepshrink] ${toolName} on ${key} - delta (${hit.content.length} chars, ${hit.ref}):\n${content}`
+					: `[deepshrink] ${toolName} on ${key} - already executed (${hit.content.length} chars, ${hit.ref}):\n${content}`;
 				const noteOverhead = note.length - content.length;
 				if (!hit.fidelityServe && !hit.deltaServe && hit.content.length <= noteOverhead) return undefined;
 				pendingElides.push({ tool: isWindowed ? 'window-slice' : toolName, key, ref: hit.ref, bytes: hit.content.length });
-				return {
-					input: { ...input, command: `echo ${JSON.stringify('[deepshrink elided]')}` },
-					additionalContext: note,
-				};
+				if (toolName === 'shell_command') {
+					return {
+						input: { ...input, command: `echo ${JSON.stringify('[deepshrink elided]')}` },
+						additionalContext: note,
+					};
+				}
+				return { block: true, additionalContext: note };
 			} catch {
 				executor.onLayerFailure('digest');
 				return undefined;
@@ -294,6 +321,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 		transformContext: async (opts?: any) => {
 			try {
 				
+				lastKnownState = opts?.state ?? lastKnownState;
 				const messages = opts?.messages;
 				if (!Array.isArray(messages)) return messages;
 				const res = await executor.transformContext({ messages });
@@ -319,7 +347,8 @@ export default function deepshrinkMod(cmd: ModApi): void {
 				}
 				pendingElides = [];
 			}
-			return opts?.state ?? lastKnownState;
+			lastKnownState = opts?.state ?? lastKnownState;
+			return lastKnownState;
 		},
 		onRunEnd: async () => {
 			await executor.flushLog();
@@ -372,7 +401,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 	cmd.addTool({
 		schema: {
 			name: 'deepshrink_recall',
-			description: 'Search the local DeepSkrin store — a persistent cache of tool outputs (read_file, grep, shell) from THIS workspace, kept ACROSS sessions. Before re-reading a file or re-running a command, call this FIRST with the FILE PATH, a FUNCTION NAME, or a distinctive phrase (e.g. "src/pane.rs", "fn session_resumable"). Returns matching snippets with a confidence score (0-100). Use a hit with a high score instead of re-reading; a STALE hit (content changed) means re-read the source. No match → the store has nothing for that query — proceed with the normal tool. Do NOT call it before write tools (edit_file, write_file) or tools needing live state (git status, git diff, fresh runs). Web results are volatile — re-search when the discovery matters. Scoped to the current workspace.',
+				description: 'Optionally search the local DeepSkrin store — a persistent cache of tool outputs (read_file, grep, shell) from THIS workspace, kept ACROSS sessions — for a specific repeated lookup. Returns matching snippets with a confidence score (0-100); a STALE hit means re-read the source. No match means the store has nothing for that query, so proceed with the normal tool. Do not use it for write tools, live-state checks, web results, or to inspect DeepSkrin and its own instructions. Scoped to the current workspace.',
 			input_schema: {
 				type: 'object',
 				properties: {
@@ -394,10 +423,13 @@ export default function deepshrinkMod(cmd: ModApi): void {
 			}
 			const body = hits
 				.map(h => {
+					const rawFlags = h.flags ?? [];
+					const isSuperseeded = rawFlags.includes('superseded');
+					const otherFlags = rawFlags.filter(f => f !== 'superseded');
 					const conf = h.stale
-						? ` ⚠ STALE (${h.score}% — ${(h.flags ?? []).join(', ')})`
+						? ` ⚠ STALE (${h.score}% — ${rawFlags.join(', ')})`
 						: h.score !== undefined
-							? ` ✓ confiance ${h.score}%${h.flags?.length ? ` (${h.flags.join(', ')})` : ''}`
+							? ` ✓ confiance ${h.score}%${isSuperseeded ? ' (file unchanged, superseded by newer read - content usable)' : otherFlags.length ? ` (${otherFlags.join(', ')})` : ''}`
 							: '';
 					return `${h.ref}${conf}\n${h.content}`;
 				})
@@ -566,6 +598,23 @@ export default function deepshrinkMod(cmd: ModApi): void {
 		handler: async () => {
 			const on = await executor.toggle();
 			return { message: panel('DEEPSKRIN TOGGLE', badge(on)) };
+		},
+	});
+
+	cmd.addCommand({
+		name: 'deepshrink-mask-model',
+		description: 'Masquage par modele : seuil en % de la fenetre reelle (auto|on|off|1-100)',
+		argumentHint: '[<modele> <auto|on|off|1-100>]',
+		handler: async ({ args }) => {
+			const parts = args.trim().split(/\s+/).filter(Boolean);
+			if (parts.length === 0) {
+				return { message: panel('DEEPSKRIN MASK PAR MODELE', `${await executor.listMaskPerModel()}\n\nusage: /deepshrink-mask-model <modele> <auto|on|off|1-100>` ) };
+			}
+			const [model, value] = parts;
+			if (!value) {
+				return { message: panel('DEEPSKRIN MASK PAR MODELE', await executor.describeMaskForModel(model)) };
+			}
+			return { message: panel('DEEPSKRIN MASK PAR MODELE', await executor.setMaskForModel(model, value)) };
 		},
 	});
 

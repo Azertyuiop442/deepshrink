@@ -155,7 +155,7 @@ export function formatDeltaPatch(summary: DiffSummary, path: string, opts: { unc
 		}
 	}
 	if (opts.unchanged !== undefined && opts.unchanged > 0) {
-		lines.push(`  … [${opts.unchanged} unchanged lines preserved in store${opts.ref ? ` ${opts.ref}` : ''} — use deepshrink_recall to re-read]`);
+		lines.push(`  … [${opts.unchanged} unchanged lines preserved in store${opts.ref ? ` ${opts.ref}` : ''}]`);
 	}
 	return lines.join('\n');
 }

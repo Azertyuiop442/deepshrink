@@ -68,19 +68,20 @@ export class EventLog {
 
 	
 	async flush(): Promise<void> {
-		if (this.buffer.length === 0) return;
-		const batch = this.buffer.splice(0, this.buffer.length);
-		const lines = batch.map(e => JSON.stringify(e) + '\n').join('');
-		this.pending = this.pending.then(async () => {
-			await mkdir(this.dir, { recursive: true });
-			const handle = await open(this.path, 'a');
-			try {
-				await handle.write(lines, 'utf8');
-			} finally {
-				await handle.close();
-			}
-		});
-		await this.pending;
+		if (this.buffer.length > 0) {
+			const batch = this.buffer.splice(0, this.buffer.length);
+			const lines = batch.map(e => JSON.stringify(e) + '\n').join('');
+			this.pending = this.pending.then(async () => {
+				await mkdir(this.dir, { recursive: true });
+				const handle = await open(this.path, 'a');
+				try {
+					await handle.write(lines, 'utf8');
+				} finally {
+					await handle.close();
+				}
+			});
+		}
+		await this.pending.catch(() => {});
 	}
 
 	
