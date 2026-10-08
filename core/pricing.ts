@@ -165,6 +165,7 @@ const CC_NAME_TO_ID: Record<string, string> = {
 	'grok 4.5': 'xai/grok-4.5',
 	'inkling': 'thinkingmachines/inkling',
 	'inkling small': 'thinkingmachines/inkling-small',
+	'space bunny alpha': 'stealth/space-bunny-alpha',
 };
 
 
@@ -300,6 +301,7 @@ export const HAND_PRICING: PricingTable = {
 	models: [
 		
 		{id: 'claude-haiku-4-5', inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.1},
+		{id: 'deepseek/deepseek-v4.1-flash', inputPerM: 0.15, outputPerM: 0.6, cacheReadPerM: 0.003},
 		{id: 'claude-sonnet-4-6', inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3},
 		{id: 'claude-sonnet-5', inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3},
 		{id: 'claude-opus-4-7', inputPerM: 15, outputPerM: 75, cacheReadPerM: 1.5},

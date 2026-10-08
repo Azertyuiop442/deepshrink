@@ -3,7 +3,7 @@
 
 
 import { hashForContent, shortHash } from './hash.ts';
-import type { DeepSkrinConfig } from './config.ts';
+import type { DeepShrinkConfig } from './config.ts';
 
 export interface BlobMeta {
 	hash: string;        
@@ -75,7 +75,7 @@ export function ingestContent(
 	state: BlobStoreState,
 	content: string,
 	session: string,
-	config: DeepSkrinConfig,
+	config: DeepShrinkConfig,
 	now = Date.now(),
 	bypass = false,
 	provenance: Partial<Pick<BlobMeta, 'workspace' | 'source' | 'command' | 'filePath' | 'searchPattern' | 'fileMtime' | 'fileSize' | 'dirMtime' | 'dirSize' | 'fullFile' | 'realPath'>> = {},
@@ -217,22 +217,28 @@ export function detectBinary(content: string): boolean {
 }
 
 
-export function gcStore(
+export function evictOverCap(
 	state: BlobStoreState,
-	opts: { minAgeMs: number; activeSessions: Set<string>; now?: number },
-): { removed: number; blobsRemaining: number } {
+	opts: { minAgeMs: number; activeSessions: Set<string>; capBytes: number; capBlobs: number; now?: number },
+): { removed: string[]; remaining: number; totalBytes: number } {
 	const now = opts.now ?? Date.now();
-	const cutoff = now - opts.minAgeMs;
-	let removed = 0;
-	for (const [hash, meta] of state.blobs) {
-		const isActive = opts.activeSessions.has(meta.session);
-		if (!isActive && meta.lastRef < cutoff && meta.createdAt < cutoff) {
-			state.blobs.delete(hash);
-			removed++;
-		}
+	let totalBytes = 0;
+	for (const meta of state.blobs.values()) totalBytes += meta.size;
+	const over = () => (opts.capBytes > 0 && totalBytes > opts.capBytes) || (opts.capBlobs > 0 && state.blobs.size > opts.capBlobs);
+	const removed: string[] = [];
+	if (!over()) return { removed, remaining: state.blobs.size, totalBytes };
+	const candidates = [...state.blobs.values()]
+		.filter((m) => !opts.activeSessions.has(m.session))
+		.filter((m) => opts.minAgeMs <= 0 || (now - (m.lastRef || m.createdAt) > opts.minAgeMs && now - m.createdAt > opts.minAgeMs))
+		.sort((a, b) => (a.lastRef || a.createdAt) - (b.lastRef || b.createdAt));
+	for (const meta of candidates) {
+		if (!over()) break;
+		totalBytes -= meta.size;
+		removed.push(meta.hash);
+		state.blobs.delete(meta.hash);
 	}
-	if (removed > 0) state.indexRev += 1;
-	return { removed, blobsRemaining: state.blobs.size };
+	if (removed.length > 0) state.indexRev += 1;
+	return { removed, remaining: state.blobs.size, totalBytes };
 }
 
 

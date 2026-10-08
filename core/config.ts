@@ -4,7 +4,7 @@ export type Locale = 'en' | 'fr';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-export interface DeepSkrinConfig {
+export interface DeepShrinkConfig {
 	enabled: boolean;
 	locale: Locale;
 	logLevel: LogLevel;
@@ -67,7 +67,9 @@ export interface DeepSkrinConfig {
 	playbookMaxEntries: number;
 }
 
-export const DEFAULT_CONFIG: DeepSkrinConfig = {
+export type DeepSkrinConfig = DeepShrinkConfig;
+
+export const DEFAULT_CONFIG: DeepShrinkConfig = {
 	enabled: false, 
 	locale: 'en',
 	logLevel: 'info',
@@ -88,8 +90,8 @@ export const DEFAULT_CONFIG: DeepSkrinConfig = {
 	breakerHalfOpenTurns: 5,
 	gcMinBlobAgeMs: 30 * 60_000,
 	gcIntervalMs: 30 * 60_000,
-	maxStoreBytes: 256 * 1024 * 1024,
-	maxStoreBlobs: 40000,
+	maxStoreBytes: 48 * 1024 * 1024,
+	maxStoreBlobs: 9000,
 	digestEnabled: true,
 	
 	
@@ -110,10 +112,10 @@ export const DEFAULT_CONFIG: DeepSkrinConfig = {
 	viewEnabled: false,
 	maskEnabled: true,
 	maskKeepLast: 8,
-	maskPolling: 4,
+	maskPolling: 16,
 	maskMinChars: 500,
 	maskMinSavingsPct: 10,
-	maskPressureTokens: 0,
+	maskPressureTokens: 150_000,
 	maskPressurePct: 0.7,
 	maskPerModel: {},
 	playbookEnabled: true,
@@ -144,10 +146,10 @@ function sanitizeMaskPerModel(raw: unknown): Record<string, MaskModelOverride> {
 	return out;
 }
 
-export function mergeConfig(partial: Partial<DeepSkrinConfig> | null | undefined): DeepSkrinConfig {
+export function mergeConfig(partial: Partial<DeepShrinkConfig> | null | undefined): DeepShrinkConfig {
 	if (!partial || typeof partial !== 'object') return { ...DEFAULT_CONFIG };
-	const out: DeepSkrinConfig = { ...DEFAULT_CONFIG };
-	for (const k of Object.keys(out) as (keyof DeepSkrinConfig)[]) {
+	const out: DeepShrinkConfig = { ...DEFAULT_CONFIG };
+	for (const k of Object.keys(out) as (keyof DeepShrinkConfig)[]) {
 		const v = (partial as Record<string, unknown>)[k];
 		const target = out[k];
 		if (typeof v === 'boolean' && typeof target === 'boolean') (out as unknown as Record<string, unknown>)[k] = v;
@@ -165,7 +167,7 @@ export function mergeConfig(partial: Partial<DeepSkrinConfig> | null | undefined
 	return out;
 }
 
-export function isConfig(v: unknown): v is DeepSkrinConfig {
+export function isConfig(v: unknown): v is DeepShrinkConfig {
 	if (!v || typeof v !== 'object') return false;
 	const o = v as Record<string, unknown>;
 	return typeof o.enabled === 'boolean' && typeof o.locale === 'string' && typeof o.logLevel === 'string';

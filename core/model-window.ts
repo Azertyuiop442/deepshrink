@@ -70,8 +70,9 @@ export function loadCatalog(path: string = CATALOG_PATH): CatalogCache | null {
 }
 
 export function pressureTokensFor(windowTokens: number | null, pct: number, explicitTokens: number): number {
-	if (explicitTokens > 0) return explicitTokens;
-	if (!windowTokens || !(windowTokens > 0)) return 0;
+	if (!windowTokens || !(windowTokens > 0)) return explicitTokens > 0 ? explicitTokens : 0;
 	const ratio = pct > 0 && pct <= 1 ? pct : 0.7;
-	return Math.round(windowTokens * ratio);
+	const fromWindow = Math.round(windowTokens * ratio);
+	if (explicitTokens > 0) return Math.min(fromWindow, explicitTokens);
+	return fromWindow;
 }

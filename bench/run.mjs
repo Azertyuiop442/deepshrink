@@ -101,7 +101,7 @@ export async function runBench() {
 const invokedDirectly = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href;
 if (invokedDirectly) {
 	const r = await runBench();
-	console.log("DeepSkrin compression bench (bundled corpus, real pipeline)\n");
+	console.log("DeepShrink compression bench (bundled corpus, real pipeline)\n");
 	for (const it of r.items) {
 		console.log(`  ${it.name.padEnd(12)} ${String(it.before).padStart(7)} -> ${String(it.after).padStart(7)} chars  (-${it.pct}%)`);
 	}

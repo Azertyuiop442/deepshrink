@@ -3,7 +3,7 @@
 import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { EVENT_SCHEMA_VERSION } from '../core/events.ts';
-import type { DeepSkrinConfig } from '../core/config.ts';
+import type { DeepShrinkConfig } from '../core/config.ts';
 import type { BlobStoreState } from '../core/store.ts';
 import { redact } from '../core/redact.ts';
 
@@ -18,7 +18,7 @@ export interface ExportResult {
 export async function exportBundle(opts: {
 	dir: string;          
 	outPath: string;
-	config: DeepSkrinConfig;
+	config: DeepShrinkConfig;
 	state: BlobStoreState;
 	sessionEvents: Array<{ file: string; lines: string[] }>;
 	redactPaths?: boolean;

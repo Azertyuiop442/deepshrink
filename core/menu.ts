@@ -21,7 +21,7 @@ export interface MenuDefinition {
 }
 
 export const MAIN_MENU: MenuDefinition = {
-	title: 'DeepSkrin  ·  main menu',
+	title: 'DeepShrink  ·  main menu',
 	options: [
 		{ label: 'STATUS    · session + store + guard state', value: 'status' },
 		{ label: 'STATS     · efficiency, break-even, cache hit', value: 'stats' },

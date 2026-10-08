@@ -3,13 +3,13 @@
 
 
 import type { BlobStoreState } from './store.ts';
-import type { DeepSkrinConfig } from './config.ts';
+import type { DeepShrinkConfig } from './config.ts';
 import type { I18n } from './i18n.ts';
 
 export interface ViewInput {
 	state: BlobStoreState;
 	blobContents: Map<string, string>;
-	config: DeepSkrinConfig;
+	config: DeepShrinkConfig;
 	i18n: I18n;
 	messages: Array<{ role: string; content: string }>;
 	toolCallHistory: Array<{ tool: string; input: string; path?: string; hash?: string }>;

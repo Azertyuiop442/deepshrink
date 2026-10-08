@@ -57,7 +57,29 @@ function badge(enabled: boolean): string {
 	return enabled ? `${flexoki.green('●')} ${flexoki.bold('ON')}` : `${flexoki.red('●')} ${flexoki.bold('OFF')}`;
 }
 import type { LogLevel } from '../core/config.ts';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+
+function computeRev(): string {
+	try {
+		const base = new URL('../', import.meta.url);
+		const files = [
+			'entry/index.ts',
+			'runtime/executor.ts',
+			'core/config.ts',
+			'core/mask.ts',
+			'core/model-window.ts',
+			'core/commitments.ts',
+			'core/rules.ts',
+			'core/stats.ts',
+		];
+		const h = createHash('sha256');
+		for (const f of files) h.update(readFileSync(new URL(f, base)));
+		return h.digest('hex').slice(0, 8);
+	} catch {
+		return 'unknown';
+	}
+}
 
 const getDir = () => {
 	if (process.env.DEEPSHRINK_DATA_DIR) return process.env.DEEPSHRINK_DATA_DIR;
@@ -134,6 +156,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 	const executor = new Executor(
 		{
 			dir,
+			rev: computeRev(),
 			configStore,
 			pricing,
 			createLog: (sid, level) => new EventLog(`${dir}/events`, sid, level),
@@ -305,6 +328,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 					: `[deepshrink] ${toolName} on ${key} - already executed (${hit.content.length} chars, ${hit.ref}):\n${content}`;
 				const noteOverhead = note.length - content.length;
 				if (!hit.fidelityServe && !hit.deltaServe && hit.content.length <= noteOverhead) return undefined;
+				executor.noteElideSaved(hit.content.length - note.length);
 				pendingElides.push({ tool: isWindowed ? 'window-slice' : toolName, key, ref: hit.ref, bytes: hit.content.length });
 				if (toolName === 'shell_command') {
 					return {
@@ -401,7 +425,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 	cmd.addTool({
 		schema: {
 			name: 'deepshrink_recall',
-				description: 'Optionally search the local DeepSkrin store — a persistent cache of tool outputs (read_file, grep, shell) from THIS workspace, kept ACROSS sessions — for a specific repeated lookup. Returns matching snippets with a confidence score (0-100); a STALE hit means re-read the source. No match means the store has nothing for that query, so proceed with the normal tool. Do not use it for write tools, live-state checks, web results, or to inspect DeepSkrin and its own instructions. Scoped to the current workspace.',
+				description: 'Optionally search the local DeepShrink store — a persistent cache of tool outputs (read_file, grep, shell) from THIS workspace, kept ACROSS sessions — for a specific repeated lookup. Returns matching snippets with a confidence score (0-100); a STALE hit means re-read the source. No match means the store has nothing for that query, so proceed with the normal tool. Do not use it for write tools, live-state checks, web results, or to inspect DeepShrink and its own instructions. Scoped to the current workspace.',
 			input_schema: {
 				type: 'object',
 				properties: {
@@ -447,7 +471,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 	cmd.addTool({
 		schema: {
 			name: 'deepshrink_symbol',
-			description: 'Fetch ONE symbol (function, class, method, type, struct) from the local DeepSkrin store by exact name - extracted with its body, line range, file path and blob ref - instead of reading or grepping whole files. Use it FIRST when you know the symbol name; fall back to grep/read_file when it returns nothing.',
+			description: 'Fetch ONE symbol (function, class, method, type, struct) from the local DeepShrink store by exact name - extracted with its body, line range, file path and blob ref - instead of reading or grepping whole files. Use it FIRST when you know the symbol name; fall back to grep/read_file when it returns nothing.',
 			input_schema: {
 				type: 'object',
 				properties: {
@@ -483,7 +507,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 	
 	cmd.addCommand({
 		name: 'deepshrink',
-		description: 'DeepSkrin · status, stats, recall, store, logs, config, clean, help (menu)',
+		description: 'DeepShrink · status, stats, recall, store, logs, config, clean, help (menu)',
 		argumentHint: '[status|stats|recall <q>|store|logs|config|clean|help]',
 		handler: async ({ args }) => {
 			const action = args.trim().split(/\s+/)[0] ?? '';
@@ -507,7 +531,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 					if (dash) {
 						pushModals(MOD_ID, [{
 							id: 'deepshrink-clean-confirm',
-							title: 'Confirm — Purge DeepSkrin',
+							title: 'Confirm — Purge DeepShrink',
 							pending: true,
 							confirm: 'Choose what to purge:',
 							items: [
@@ -530,7 +554,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 					
 					const target = action === 'on';
 					await executor.setEnabled(target);
-					return pushInfoModal('DEEPSKRIN', `DeepSkrin ${target ? 'ON' : 'OFF'}`, dash);
+					return pushInfoModal('DEEPSKRIN', `DeepShrink ${target ? 'ON' : 'OFF'}`, dash);
 				}
 				default: {
 					
@@ -547,7 +571,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 
 	cmd.addCommand({
 		name: 'deepshrink-log',
-		description: 'DeepSkrin logs · tail N, all, level <lvl>, open, stats, prune [days], clean, export <path>',
+		description: 'DeepShrink logs · tail N, all, level <lvl>, open, stats, prune [days], clean, export <path>',
 		argumentHint: '[tail N|all|level <lvl>|open|stats|prune <days>|clean|export <path>]',
 		handler: async ({ args }) => {
 			const [sub, ...rest] = args.trim().split(/\s+/);
@@ -594,7 +618,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 
 	cmd.addCommand({
 		name: 'deepshrink-toggle',
-		description: 'Toggle DeepSkrin on/off',
+		description: 'Toggle DeepShrink on/off',
 		handler: async () => {
 			const on = await executor.toggle();
 			return { message: panel('DEEPSKRIN TOGGLE', badge(on)) };
@@ -620,7 +644,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 
 	cmd.addCommand({
 		name: 'deepshrink-help',
-		description: 'DeepSkrin help',
+		description: 'DeepShrink help',
 		handler: async () => ({ message: panel('DEEPSKRIN HELP', await executor.cmdHelp()) }),
 	});
 
@@ -655,7 +679,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 						
 						pushModals(MOD_ID, [{
 							id: 'deepshrink-clean-confirm',
-							title: 'Confirm — Purge DeepSkrin',
+							title: 'Confirm — Purge DeepShrink',
 							pending: true,
 							confirm: 'Choose what to purge:',
 							items: [
@@ -670,12 +694,12 @@ export default function deepshrinkMod(cmd: ModApi): void {
 						}]);
 						return;
 					}
-					case 'toggle': { const on = await executor.toggle(); body = `DeepSkrin ${on ? 'ON' : 'OFF'}`; break; }
+					case 'toggle': { const on = await executor.toggle(); body = `DeepShrink ${on ? 'ON' : 'OFF'}`; break; }
 					default: return;
 				}
 				await pushInfoModal('DEEPSKRIN', body, true);
 			})();
-		} else if (pickup.modal === 'Confirm — Purge DeepSkrin') {
+		} else if (pickup.modal === 'Confirm — Purge DeepShrink') {
 			consume();
 			clearModals(MOD_ID);
 			const isAll = pickup.value === 'clean-all';
@@ -684,12 +708,12 @@ export default function deepshrinkMod(cmd: ModApi): void {
 				void (async () => {
 					
 					
-					pushProgress(MOD_ID, 'Purging DeepSkrin…', 0, 2);
+					pushProgress(MOD_ID, 'Purging DeepShrink…', 0, 2);
 					await new Promise((r) => setTimeout(r, 250));
 					const res = isAll
 						? await executor.purgeStore()
 						: await executor.purgeWorkspace();
-					pushProgress(MOD_ID, 'Purging DeepSkrin…', 2, 2);
+					pushProgress(MOD_ID, 'Purging DeepShrink…', 2, 2);
 					await new Promise((r) => setTimeout(r, 400));
 					clearModals(MOD_ID);
 					
@@ -702,7 +726,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 				})();
 			}
 		}
-	}, 2000, (pickup) => pickup.modal === 'Confirm — Purge DeepSkrin');
+	}, 2000, (pickup) => pickup.modal === 'Confirm — Purge DeepShrink');
 }
 
 
@@ -776,7 +800,7 @@ function pick(u: Record<string, unknown>, ...keys: string[]): number {
 
 async function runMainMenu(executor: Executor, host: ExecutorHost): Promise<string> {
 	if (!host.select) {
-		return 'DeepSkrin menu (headless)\n/status /stats /recall <q> /store /logs /config /help';
+		return 'DeepShrink menu (headless)\n/status /stats /recall <q> /store /logs /config /help';
 	}
 	const options = [
 		{ label: '◉ STATUS   · session + store state', value: 'status' },
@@ -789,7 +813,7 @@ async function runMainMenu(executor: Executor, host: ExecutorHost): Promise<stri
 		{ label: '✕ Cancel', value: 'cancel' },
 	];
 	while (true) {
-		const choice = await host.select('DeepSkrin · main menu', options);
+		const choice = await host.select('DeepShrink · main menu', options);
 		if (!choice || choice === 'cancel') return 'cancelled';
 		let out: string;
 		switch (choice) {

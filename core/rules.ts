@@ -80,7 +80,7 @@ const DEFAULT_RULES: Rule[] = [
 		
 		action: {
 			kind: 'error-only',
-			pattern: /^(FAIL|Error|error|✗|×|not ok|test result:|.*\bfailed\b.*|.*\bpassed\b.*,.*\bfailed\b.*)/m,
+			pattern: /(^(?:FAIL|Error|error|✗|×|not ok|test result:)|(?:ERR_[A-Z0-9_]+|\bERROR\b|\bFAIL(?:ED|URE)?\b|\bpanic\b|\bfatal\b|\bException\b|Traceback \(most recent)|\bfailed\b|\bpassed\b.*\bfailed\b)/m,
 		},
 	},
 	{

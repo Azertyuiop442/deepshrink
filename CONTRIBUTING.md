@@ -1,4 +1,4 @@
-# Contributing to DeepSkrin
+# Contributing to DeepShrink
 
 Thank you for your interest in contributing. Bug reports, benchmark results, and code
 contributions are all welcome.
@@ -14,7 +14,7 @@ When filing an issue, please provide:
 
 - **Environment**: OS, runtime (node version), and how the mod is loaded (Command Code
   version, or other host).
-- **Version**: DeepSkrin version or commit hash.
+- **Version**: DeepShrink version or commit hash.
 - **Reproduction**: the exact tool calls and inputs that triggered the behavior.
 - **Expected vs. Actual**: what the store should have served versus what it served.
 - **Telemetry**: the output of `/deepshrink status` and `metrics.json`

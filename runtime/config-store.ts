@@ -2,7 +2,7 @@
 
 import { readFile, writeFile, rename, mkdir, readdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { DeepSkrinConfig } from '../core/config.ts';
+import type { DeepShrinkConfig } from '../core/config.ts';
 import { DEFAULT_CONFIG, mergeConfig, isConfig } from '../core/config.ts';
 
 const TMP_PREFIX = 'tmp-';
@@ -21,19 +21,19 @@ export class ConfigStore {
 		return join(this.dir, this.name);
 	}
 
-	async load(): Promise<{ config: DeepSkrinConfig; corrupt: boolean }> {
+	async load(): Promise<{ config: DeepShrinkConfig; corrupt: boolean }> {
 		await this.sweepTemps();
 		try {
 			const raw = await readFile(this.path, 'utf8');
 			const parsed = JSON.parse(raw) as unknown;
 			if (!isConfig(parsed)) return { config: { ...DEFAULT_CONFIG }, corrupt: true };
-			return { config: mergeConfig(parsed as Partial<DeepSkrinConfig>), corrupt: false };
+			return { config: mergeConfig(parsed as Partial<DeepShrinkConfig>), corrupt: false };
 		} catch {
 			return { config: { ...DEFAULT_CONFIG }, corrupt: true };
 		}
 	}
 
-	async save(config: DeepSkrinConfig): Promise<void> {
+	async save(config: DeepShrinkConfig): Promise<void> {
 		await mkdir(this.dir, { recursive: true });
 		const tmp = `${this.path}.${TMP_PREFIX}${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 		try {

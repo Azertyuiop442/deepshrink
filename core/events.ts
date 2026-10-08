@@ -12,7 +12,7 @@ export interface BaseEvent {
 	hookMs?: number;
 }
 
-export type DeepSkrinEvent = BaseEvent & (
+export type DeepShrinkEvent = BaseEvent & (
 	| { type: 'store'; action: 'ingest' | 'recall' | 'gc' | 'rebuild' | 'save' | 'invalidate' | 'invalidate-search' | 'skip-read-notice' | 'supersede-delete' | 'superseded' | 'full-file' | 'fullfile-supersede-delete' | 'full-file-ingest' | 'window-serve' | 'tool-hit' | 'evict' | 'purge' | 'purge-workspace' | 'purge-resync' | 'metrics-load'; hash?: string; bytes?: number; blobs?: number; removed?: number; remaining?: number; events?: number; workspace?: string; tool?: string; key?: string; pattern?: string; candidates?: number; edited?: number; path?: string; error?: string; enabled?: boolean; query?: string; bypass?: boolean; miss?: boolean; score?: number; followedBy?: string; toolHit?: boolean; hitReason?: string; reason?: string; stale?: boolean; cause?: { edited?: number; reIngestSameHash?: number } }
 	| { type: 'view'; action: 'transform' | 'unchanged' | 'elide' | 'binary' | 'skeleton' | 'toc' | 'reread-elide' | 'delta-elide' | 'smart' | 'mask' | 'tokens' | 'budget' | 'compress' | 'prefix-rewrite' | 'mask-cache-dip' | 'symbol' | 'frozen-lcp-ok'; bytes?: number; tokens?: number; kind?: string; lines?: number; entries?: number; path?: string; tool?: string; hash?: string; served?: number; saved?: number; masked?: number; observations?: number; cut?: number; turn?: number; patchBytes?: number; mode?: string; role?: string; cause?: string; from?: number; to?: number; atMessage?: number; lcpChars?: number; ratio?: number; name?: string; hits?: number; mentions?: number; trimmedBytes?: number; before?: number; after?: number; messages?: number; precededByRecall?: boolean; compacted?: boolean; servedContent?: boolean }
 	| { type: 'meter'; action: 'estimate' | 'real' | 'warn' | 'clamp'; contextTokens?: number; growthPerTurn?: number; headroomPct?: number; estimateChars?: number; actualChars?: number }
@@ -28,7 +28,7 @@ export type DeepSkrinEvent = BaseEvent & (
 	| { type: 'index'; action: 'build'; size?: number; ms?: number }
 );
 
-export type DeepSkrinEventName = DeepSkrinEvent['type'];
+export type DeepShrinkEventName = DeepShrinkEvent['type'];
 
 export const LEVEL_ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
@@ -37,14 +37,14 @@ export function shouldEmit(level: LogLevel, configLevel: LogLevel): boolean {
 	return LEVEL_ORDER[level] >= LEVEL_ORDER[configLevel];
 }
 
-export function makeEvent(session: string, level: LogLevel, partial: Record<string, unknown> & { type: DeepSkrinEventName }, ts?: string): DeepSkrinEvent {
+export function makeEvent(session: string, level: LogLevel, partial: Record<string, unknown> & { type: DeepShrinkEventName }, ts?: string): DeepShrinkEvent {
 	return {
 		v: EVENT_SCHEMA_VERSION,
 		t: ts ?? new Date().toISOString(),
 		session,
 		level,
 		...partial,
-	} as DeepSkrinEvent;
+	} as DeepShrinkEvent;
 }
 
 
@@ -95,7 +95,7 @@ export const emptySnapshot = (session: string): SessionSnapshot => ({
 	supersededReIngest: 0,
 });
 
-export function reduceSnapshot(snap: SessionSnapshot, ev: DeepSkrinEvent): SessionSnapshot {
+export function reduceSnapshot(snap: SessionSnapshot, ev: DeepShrinkEvent): SessionSnapshot {
 	if (ev.session !== snap.session) return snap;
 	switch (ev.type) {
 		case 'session':

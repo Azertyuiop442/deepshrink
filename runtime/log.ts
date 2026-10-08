@@ -4,7 +4,7 @@
 
 import { open, readFile, readdir, unlink, mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { DeepSkrinEvent } from '../core/events.ts';
+import type { DeepShrinkEvent } from '../core/events.ts';
 import { shouldEmit } from '../core/events.ts';
 import type { LogLevel } from '../core/config.ts';
 
@@ -18,7 +18,7 @@ export class EventLog {
 	private path: string;
 	private pending: Promise<void> = Promise.resolve();
 	private level: LogLevel;
-	private buffer: DeepSkrinEvent[] = [];
+	private buffer: DeepShrinkEvent[] = [];
 	private dir: string;
 	private sessionId: string;
 
@@ -38,7 +38,7 @@ export class EventLog {
 	}
 
 	
-	append(event: DeepSkrinEvent): void {
+	append(event: DeepShrinkEvent): void {
 		if (!shouldEmit(event.level, this.level)) return;
 		this.buffer.push(event);
 		if (event.level === 'warn' || event.level === 'error') {
@@ -61,7 +61,7 @@ export class EventLog {
 	}
 
 	
-	appendBatched(event: DeepSkrinEvent): void {
+	appendBatched(event: DeepShrinkEvent): void {
 		if (!shouldEmit(event.level, this.level)) return;
 		this.buffer.push(event);
 	}
@@ -90,15 +90,15 @@ export class EventLog {
 		await this.flush();
 	}
 
-	async readAll(): Promise<DeepSkrinEvent[]> {
+	async readAll(): Promise<DeepShrinkEvent[]> {
 		await this.flush();
-		const out: DeepSkrinEvent[] = [];
+		const out: DeepShrinkEvent[] = [];
 		try {
 			const raw = await readFile(this.path, 'utf8');
 			for (const line of raw.split('\n')) {
 				if (!line.trim()) continue;
 				try {
-					out.push(JSON.parse(line) as DeepSkrinEvent);
+					out.push(JSON.parse(line) as DeepShrinkEvent);
 				} catch {
 					
 				}
@@ -135,8 +135,8 @@ export class EventLog {
 	}
 
 	
-	async readAllSessions(): Promise<DeepSkrinEvent[]> {
-		const out: DeepSkrinEvent[] = [];
+	async readAllSessions(): Promise<DeepShrinkEvent[]> {
+		const out: DeepShrinkEvent[] = [];
 		let files: string[];
 		try {
 			files = await readdir(this.dir);
@@ -150,7 +150,7 @@ export class EventLog {
 				for (const line of raw.split('\n')) {
 					if (!line.trim()) continue;
 					try {
-						out.push(JSON.parse(line) as DeepSkrinEvent);
+						out.push(JSON.parse(line) as DeepShrinkEvent);
 					} catch {
 						
 					}

@@ -1,12 +1,12 @@
 #!/bin/bash
-# install.sh - install DeepSkrin as a Command Code mod (macOS / Linux)
+# install.sh - install DeepShrink as a Command Code mod (macOS / Linux)
 # Usage: bash install.sh
 set -e
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST="${HOME}/.commandcode/mods/deepshrink"
 
-echo "==> Installing DeepSkrin to ${DEST}"
+echo "==> Installing DeepShrink to ${DEST}"
 
 if [ -d "$DEST" ]; then
     echo "==> Existing install found, backing up to ${DEST}.bak"
@@ -22,9 +22,9 @@ done
 
 echo "==> Verifying load..."
 if node -e "import('${DEST}/entry/index.ts').then(m => { if (typeof m.default !== 'function') throw new Error('bad export'); console.log('ok'); }).catch(e => { console.error(e.message); process.exit(1); })" 2>/dev/null; then
-    echo "==> DeepSkrin installed. Restart your Command Code session to activate it."
+    echo "==> DeepShrink installed. Restart your Command Code session to activate it."
 else
     echo "==> Direct import check skipped (loader differences are fine - jiti handles TS at runtime)."
-    echo "==> DeepSkrin installed. Restart your Command Code session to activate it."
+    echo "==> DeepShrink installed. Restart your Command Code session to activate it."
 fi
 echo "==> Verify with: /deepshrink status"

@@ -26,6 +26,9 @@ export interface SessionStatsInput {
 	ruleSaves: number;      
 	overheadTokens: number; 
 	recallInjectedTokens?: number; 
+	maskSavedTokens?: number;   
+	deltaSavedTokens?: number;  
+	elideSavedTokens?: number;  
 	                               
 	                               
 	recalls: number;
@@ -93,14 +96,18 @@ export function computeStats(input: SessionStatsInput): SessionStats {
 	const totalOutput = input.usages.reduce((a, u) => a + u.outputTokens, 0);
 	const totalCacheRead = input.usages.reduce((a, u) => a + u.cacheRead, 0);
 	const cacheHitRatio = totalInput > 0 ? totalCacheRead / totalInput : null;
-	const savedTokens = input.ruleSaves;
+	const savedTokens = input.ruleSaves
+		+ (input.maskSavedTokens ?? 0)
+		+ (input.deltaSavedTokens ?? 0)
+		+ (input.elideSavedTokens ?? 0);
 	
 	
 	const netGain = savedTokens - input.overheadTokens - (input.recallInjectedTokens ?? 0);
 	
 	const price = input.price;
 	const cachePerM = price?.cacheReadPerM ?? (price ? price.inputPerM * DEFAULT_CACHE_RATIO : 0);
-	const costInputUsd = price ? (totalInput / 1e6) * price.inputPerM : 0;
+	const freshInput = Math.max(0, totalInput - totalCacheRead);
+	const costInputUsd = price ? (freshInput / 1e6) * price.inputPerM : 0;
 	const costOutputUsd = price ? (totalOutput / 1e6) * price.outputPerM : 0;
 	const costCacheUsd = price ? (totalCacheRead / 1e6) * cachePerM : 0;
 	const costUsd = costInputUsd + costOutputUsd + costCacheUsd;

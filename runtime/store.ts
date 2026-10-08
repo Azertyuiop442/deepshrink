@@ -7,7 +7,7 @@ import { hashForContent, shortHash } from '../core/hash.ts';
 import { detectBinary } from '../core/store.ts';
 import type { BlobStoreState, BlobMeta } from '../core/store.ts';
 import { rebuildIndex } from '../core/store.ts';
-import type { DeepSkrinConfig } from '../core/config.ts';
+import type { DeepShrinkConfig } from '../core/config.ts';
 
 const INDEX_NAME = 'index.json';
 
@@ -22,6 +22,7 @@ export interface PersistentStore {
 	loadState(): Promise<{ state: BlobStoreState; rebuilt: boolean }>;
 	saveBlob(hash: string, content: string): Promise<void>;
 	readBlob(hash: string): Promise<string | undefined>;
+	hasBlob(hash: string): Promise<boolean>;
 	deleteBlob(hash: string): Promise<void>;
 	checkpoint(state: BlobStoreState): Promise<void>;
 	listBlobs(): Promise<string[]>;
@@ -92,6 +93,15 @@ export class DiskStore implements PersistentStore {
 			return await readFile(this.blobPath(hash), 'utf8');
 		} catch {
 			return undefined;
+		}
+	}
+
+	async hasBlob(hash: string): Promise<boolean> {
+		try {
+			await stat(this.blobPath(hash));
+			return true;
+		} catch {
+			return false;
 		}
 	}
 

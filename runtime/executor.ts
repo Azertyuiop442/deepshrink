@@ -2,13 +2,13 @@
 
 
 
-import type { DeepSkrinConfig, LogLevel, Locale } from '../core/config.ts';
+import type { DeepShrinkConfig, LogLevel, Locale } from '../core/config.ts';
 import { DEFAULT_CONFIG, mergeConfig } from '../core/config.ts';
 import { flexoki } from './ui.ts';
 import { makeI18n, type I18n } from '../core/i18n.ts';
-import { makeEvent, reduceSnapshot, emptySnapshot, type DeepSkrinEvent, type SessionSnapshot } from '../core/events.ts';
+import { makeEvent, reduceSnapshot, emptySnapshot, type DeepShrinkEvent, type SessionSnapshot } from '../core/events.ts';
 import { redact } from '../core/redact.ts';
-import { ingestContent, gcStore, detectBinary, supersedeCounts, type BlobStoreState, type BlobMeta, type IngestResult } from '../core/store.ts';
+import { ingestContent, evictOverCap, detectBinary, supersedeCounts, type BlobStoreState, type BlobMeta, type IngestResult } from '../core/store.ts';
 import { scoreConfidence, freshnessSignals, type FreshnessSignals } from '../core/confidence.ts';
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs';
 import { digestToolOutput, type Rule } from '../core/rules.ts';
@@ -28,6 +28,7 @@ import { queryTerms, scoreRelevance, buildIdf } from '../core/relevance.ts';
 import { rrfFuse } from '../core/rrf.ts';
 import { summarizeDiffTrimmed, stripLinePrefixes, formatDeltaPatch, formatWindowDelta, countTextLines, EMPTY_DELTA_METER, type DeltaMeter, type DiffSummary } from '../core/delta.ts';
 import { maskCut, maskWorthwhile, maskAllowedByPressure, resolveMaskSettings, pickMaskOverride, shouldMask, buildMaskPlaceholder, isMaskPlaceholder, EMPTY_MASK_METER, type MaskMeter } from '../core/mask.ts';
+import { compareCommitments, recordCommitments, EMPTY_COMMITMENT_METER, type CommitmentMeter } from '../core/commitments.ts';
 import { computePressure, type PressureReading } from '../core/pressure.ts';
 import { loadCatalog, resolveContextWindow, pressureTokensFor } from '../core/model-window.ts';
 import { extractSymbol } from '../core/symbol.ts';
@@ -62,6 +63,7 @@ export interface ExecutorDeps {
 	store: PersistentStore;
 	registry: SessionRegistry;
 	host?: ExecutorHost;
+	rev?: string;
 }
 
 export interface ExecutorOptions {
@@ -100,12 +102,34 @@ export interface RecallMeter {
 
 
 export interface FidelityMeter {
-	fidelityServes: number;      
-	stubServes: number;          
-	recallCalls: number;         
-	postCompactionStubs: number; 
-	frozenRewriteRefusals: number; 
+	fidelityServes: number;
+	stubServes: number;
+	recallCalls: number;
+	postCompactionStubs: number;
+	frozenRewriteRefusals: number;
+	elisionsServed: number;
+	elisionsReverted: number;
+	elisionRevertRate: number;
+	elisionMismatches: number;
+	recallMissed: number;
+	recallHits: number;
+	lastElisionRevert: number;
 }
+
+export const EMPTY_FIDELITY_METER: FidelityMeter = {
+	fidelityServes: 0,
+	stubServes: 0,
+	recallCalls: 0,
+	postCompactionStubs: 0,
+	frozenRewriteRefusals: 0,
+	elisionsServed: 0,
+	elisionsReverted: 0,
+	elisionRevertRate: 0,
+	elisionMismatches: 0,
+	recallMissed: 0,
+	recallHits: 0,
+	lastElisionRevert: 0,
+};
 
 
 
@@ -214,7 +238,7 @@ const NOTE_OVERHEAD_CHARS = 260;
 const FROZEN_LCP_MIN_RATIO = 0.9;
 
 export class Executor {
-	config: DeepSkrinConfig = { ...DEFAULT_CONFIG };
+	config: DeepShrinkConfig = { ...DEFAULT_CONFIG };
 	state: BlobStoreState = { blobs: new Map(), indexRev: 0 };
 	blobContents = new Map<string, string>();
 	i18n: I18n = makeI18n('en');
@@ -230,6 +254,9 @@ export class Executor {
 	private errors = 0;
 	private errorsAtLastTurn = 0;
 	private ruleSaves = 0;
+	private sessionMaskChars = 0;
+	private sessionDeltaChars = 0;
+	private sessionElideChars = 0;
 	
 
 	private recallInjectedChars = 0;
@@ -244,6 +271,7 @@ export class Executor {
 	private serial = Promise.resolve();
 	private lastContextTokens = 0;
 	private modelWindowTokens: number | null = null;
+	private lastPrefixEpoch = -1;
 	private lastCalibChars = 0;
 	private lastSeenChars = 0;
 	private currentModel = '';
@@ -255,12 +283,13 @@ export class Executor {
 	
 	recallMeter: RecallMeter = { recalls: 0, served: 0, droppedStale: 0, pathLookups: 0, indexSize: 0 };
 	
-	fidelityMeter: FidelityMeter = { fidelityServes: 0, stubServes: 0, recallCalls: 0, postCompactionStubs: 0, frozenRewriteRefusals: 0 };
+	fidelityMeter: FidelityMeter = { ...EMPTY_FIDELITY_METER };
 	
 	deltaMeter: DeltaMeter = { ...EMPTY_DELTA_METER };
 	private deltaCache = new Map<string, { mtimeMs: number; size: number; oldHash: string; summary: DiffSummary; newLines: number; totalOldLines: number }>();
 	
 	maskMeter: MaskMeter = { ...EMPTY_MASK_METER };
+	commitmentsMeter: CommitmentMeter = { ...EMPTY_COMMITMENT_METER, samples: [] };
 	private lastMaskSig = '';
 	private turnCount = 0;
 	private lastFrozenEnd = -1;
@@ -281,7 +310,7 @@ export class Executor {
 
 
 
-	calibrationSamples: Array<{ confidence: number; used: boolean }> = [];
+	calibrationSamples: Array<{ confidence: number; used: boolean; hit: boolean }> = [];
 	
 	private lastRecallOutcome: 'stale' | 'miss' | 'hit' | undefined = undefined;
 	
@@ -312,9 +341,11 @@ export class Executor {
 	private lastCheckpointAt = 0;
 
 	private deps: ExecutorDeps;
+	rev = 'unknown';
 
 	constructor(deps: ExecutorDeps, opts: ExecutorOptions = {}) {
 		this.deps = deps;
+		if (deps.rev) this.rev = deps.rev;
 		this.sessionId = opts.sessionId ?? 'unknown';
 		this.workspace = opts.workspace ?? process.cwd();
 		this.snapshot = emptySnapshot(this.sessionId);
@@ -371,6 +402,8 @@ export class Executor {
 			if (d) this.deltaMeter = { ...EMPTY_DELTA_METER, ...d };
 			const k = m.maskMeter as Partial<MaskMeter> | undefined;
 			if (k) this.maskMeter = { ...EMPTY_MASK_METER, ...k };
+			const c = m.commitmentsMeter as Partial<CommitmentMeter> | undefined;
+			if (c) this.commitmentsMeter = { ...EMPTY_COMMITMENT_METER, ...c, samples: Array.isArray(c.samples) ? c.samples.slice(-20) : [] };
 			this.playbook = parsePlaybook(m);
 		} catch (e) {
 			this.emit('store', 'warn', { action: 'metrics-load', error: String(e) });
@@ -391,7 +424,14 @@ export class Executor {
 
 	async onSessionStart(source: string): Promise<void> {
 		await this.init();
-		this.emit('session', 'info', { action: 'start', locale: this.config.locale });
+		this.emit('session', 'info', {
+			action: 'start',
+			locale: this.config.locale,
+			rev: this.rev,
+			maskPolling: this.config.maskPolling,
+			maskPressureTokens: this.config.maskPressureTokens,
+			maskPressurePct: this.config.maskPressurePct,
+		});
 		if (this.config.enabled) {
 			this.deps.host?.notify?.(this.i18n.t('notify.activated'));
 		}
@@ -431,7 +471,7 @@ export class Executor {
 
 	
 
-	private emit(type: DeepSkrinEvent['type'], level: LogLevel, partial: Record<string, unknown>): void {
+	private emit(type: DeepShrinkEvent['type'], level: LogLevel, partial: Record<string, unknown>): void {
 		const ev = makeEvent(this.sessionId, level, { type, ...partial } as never);
 		this.snapshot = reduceSnapshot(this.snapshot, ev);
 		if (level === 'warn' || level === 'error') {
@@ -521,6 +561,13 @@ export class Executor {
 			if (opts.isError) this.errors++;
 			if (digest.text !== undefined && digest.text !== content) {
 				this.ruleSaves += Math.max(0, (content.length - digest.text.length) / this.config.estimateCharsPerToken);
+				const report = compareCommitments(content, digest.text);
+				recordCommitments(this.commitmentsMeter, report, `digest:${digest.rule ?? '?'}`);
+				const contract = digest.rule === 'error-only' || digest.rule === 'failure-focus';
+				const misses = contract ? report.missed.filter((m) => m.startsWith('error:')) : [];
+				if (misses.length > 0) {
+					this.emit('view', 'warn', { action: 'commitment-miss', tool: toolName, rule: digest.rule, missed: misses.length, sample: misses[0].slice(0, 120) });
+				}
 			}
 			
 			const redactedContent = content.length > 0 ? redact(content).text : content;
@@ -614,6 +661,12 @@ export class Executor {
 							
 							
 							this.fidelityMeter.fidelityServes++;
+						this.fidelityMeter.elisionsReverted++;
+						this.fidelityMeter.elisionRevertRate =
+							this.fidelityMeter.elisionsServed + this.fidelityMeter.elisionsReverted > 0
+								? this.fidelityMeter.elisionsReverted /
+								  (this.fidelityMeter.elisionsServed + this.fidelityMeter.elisionsReverted)
+								: 0;
 							this.emit('view', 'info', { action: 'reread-elide', hash: existing.hash.slice(0, this.config.hashPrefixChars), path, bytes: redactedContent.length, precededByRecall, compacted: true, servedContent: true });
 							this.toolCalls.push({ tool: toolName, input: JSON.stringify(input).slice(0, 200), path, hash: existing.hash });
 							if (this.toolCalls.length > 200) this.toolCalls.shift();
@@ -624,7 +677,9 @@ export class Executor {
 						}
 						
 						this.fidelityMeter.stubServes++;
-						if (this.compactionEpoch > 0) this.fidelityMeter.postCompactionStubs++;
+						this.fidelityMeter.elisionsServed++;
+						this.fidelityMeter.lastElisionRevert = Date.now();
+						if (this.compactionEpoch > 0 && !this.isStubSafe(existing.hash)) this.fidelityMeter.postCompactionStubs++;
 						this.emit('view', 'info', { action: 'reread-elide', hash: existing.hash.slice(0, this.config.hashPrefixChars), path, bytes: redactedContent.length, precededByRecall, compacted: false, servedContent: false });
 						
 						this.toolCalls.push({ tool: toolName, input: JSON.stringify(input).slice(0, 200), path, hash: existing.hash });
@@ -884,6 +939,7 @@ export class Executor {
 			}
 			this.deltaMeter.servedFull++;
 			this.deltaMeter.savedChars += Math.max(0, target.length - patch.length);
+			this.sessionDeltaChars += Math.max(0, target.length - patch.length);
 			return patch;
 		}
 		if (stubUnsafe) this.deltaMeter.notStubSafe++;
@@ -945,6 +1001,7 @@ export class Executor {
 		}
 		this.deltaMeter.servedFull++;
 		this.deltaMeter.savedChars += Math.max(0, full - patch.length);
+		this.sessionDeltaChars += Math.max(0, full - patch.length);
 		this.playbookServe(real, cand.hash);
 		await this.persistMeters();
 		this.emit('view', 'info', { action: 'delta-elide', path, bytes: full, patchBytes: patch.length, mode: 'full' });
@@ -1012,6 +1069,7 @@ export class Executor {
 		if (rendered.kind === 'unchanged') this.deltaMeter.windowUnchanged++;
 		this.deltaMeter.servedWindow++;
 		this.deltaMeter.savedChars += Math.max(0, slice.length - rendered.text.length);
+		this.sessionDeltaChars += Math.max(0, slice.length - rendered.text.length);
 		this.playbookServe(real, cand.hash);
 		await this.persistMeters();
 		this.emit('view', 'info', { action: 'delta-elide', path: real, offset, limit, bytes: slice.length, patchBytes: rendered.text.length, mode: 'window' });
@@ -1100,12 +1158,6 @@ export class Executor {
 						this.state.indexRev = diskState.indexRev;
 					}
 				} catch {}
-				for (const [hash] of this.state.blobs) {
-					if (!this.blobContents.has(hash)) {
-						const c = await this.deps.store.readBlob(hash);
-						if (c !== undefined) this.blobContents.set(hash, c);
-					}
-				}
 			});
 			this.lastIndexSync = Date.now();
 		}
@@ -1124,7 +1176,11 @@ export class Executor {
 			this.windowCounters.windowMissNoBlob++;
 			return undefined;
 		}
-		const content = this.blobContents.get(best.hash);
+		let content = this.blobContents.get(best.hash);
+		if (content === undefined) {
+			content = await this.deps.store.readBlob(best.hash);
+			if (content !== undefined) this.blobContents.set(best.hash, content);
+		}
 		if (content === undefined) {
 			this.windowCounters.windowMissNoBlob++;
 			return undefined;
@@ -1399,6 +1455,11 @@ export class Executor {
 					language: lang,
 				});
 				if (r.wasCompressed) {
+					const report = compareCommitments(last.content, r.text);
+					recordCommitments(this.commitmentsMeter, report, 'compress-messages');
+					if (report.missed.length > 0) {
+						this.emit('view', 'warn', { action: 'commitment-miss', tool: 'compress-messages', missed: report.missed.length, sample: report.missed[0].slice(0, 120) });
+					}
 					this.emit('view', 'info', { action: 'compress', role: last.role, saved: last.content.length - r.text.length });
 					compressedMessages.push({ role: last.role, content: r.text });
 					return compressedMessages;
@@ -1533,6 +1594,7 @@ export class Executor {
 			this.maskMeter.keptSmall += keptSmall;
 			this.maskMeter.keptError += keptError;
 			this.maskMeter.savedChars += savedChars;
+			this.sessionMaskChars += savedChars;
 			this.emit('view', 'info', { action: 'mask', masked, observations: slots.length, cut, saved: savedChars, turn: this.turnCount });
 			this.serialized(() => this.persistMeters()).catch(() => {});
 		}
@@ -1563,11 +1625,14 @@ export class Executor {
 			const check = checkLcp(this.lastFrozenText, sliceText(this.lastFrozenEnd), FROZEN_LCP_MIN_RATIO);
 			if (!check.pass) {
 				this.fidelityMeter.frozenRewriteRefusals++;
-				this.emit('view', 'warn', { action: 'prefix-rewrite', cause: 'unknown', lcpChars: check.lcpChars, ratio: check.ratio, atMessage: this.lastFrozenEnd, turn: this.turnCount });
+				const epochBumped = this.compactionEpoch !== this.lastPrefixEpoch;
+				const cause = epochBumped ? 'compaction' : check.transformedLen < check.originalLen * 0.6 ? 'truncation' : 'mutation';
+				this.emit('view', 'warn', { action: 'prefix-rewrite', cause, lcpChars: check.lcpChars, ratio: check.ratio, oldLen: check.originalLen, newLen: check.transformedLen, atMessage: this.lastFrozenEnd, turn: this.turnCount });
 			} else {
 				this.emit('view', 'debug', { action: 'frozen-lcp-ok', atMessage: this.lastFrozenEnd, turn: this.turnCount, lcpChars: check.lcpChars, ratio: check.ratio });
 			}
 		}
+		this.lastPrefixEpoch = this.compactionEpoch;
 		if (frozenEnd > this.lastFrozenEnd) {
 			this.maskMeter.prefixExtensions++;
 			this.emit('view', 'info', { action: 'prefix-rewrite', cause: 'mask-cut', from: this.lastFrozenEnd, to: frozenEnd, turn: this.turnCount });
@@ -1644,16 +1709,7 @@ export class Executor {
 					this.state.indexRev = Math.max(this.state.indexRev, diskState.indexRev);
 				}
 			} catch {}
-			
-			for (const [hash] of this.state.blobs) {
-				if (!this.blobContents.has(hash)) {
-					const c = await this.deps.store.readBlob(hash);
-					if (c !== undefined) this.blobContents.set(hash, c);
-				}
-			}
 		});
-		
-		
 		
 		const safeQuery = query.slice(0, 512);
 		let pattern: RegExp;
@@ -1718,6 +1774,7 @@ export class Executor {
 			}
 		}
 		const now = Date.now();
+		const staleDropped = new Set<string>();
 		for (const [hash, meta] of candidates) {
 			
 			
@@ -1731,7 +1788,11 @@ export class Executor {
 				|| meta.source === 'apply_patch' || meta.source === 'create_file') {
 				continue;
 			}
-			const content = this.blobContents.get(hash);
+			let content = this.blobContents.get(hash);
+			if (content === undefined) {
+				content = await this.deps.store.readBlob(hash);
+				if (content !== undefined) this.blobContents.set(hash, content);
+			}
 			if (content === undefined) continue;
 			
 			
@@ -1782,12 +1843,13 @@ export class Executor {
 			}
 			const key = `${meta.source}|${meta.command ?? ''}`;
 			const newest = newestByCmd.get(key);
-			
-			
-			
-			
+			let newestContent = newest ? this.blobContents.get(newest.hash) : undefined;
+			if (newest && newestContent === undefined) {
+				newestContent = await this.deps.store.readBlob(newest.hash);
+				if (newestContent !== undefined) this.blobContents.set(newest.hash, newestContent);
+			}
 			const sameContentAsNewest = newest !== undefined && newest.hash !== hash
-				&& this.blobContents.get(newest.hash) === content;
+				&& newestContent === content;
 			const supplanted = newest !== undefined && newest.hash !== hash && !sameContentAsNewest;
 			const conf = scoreConfidence(freshnessSignals(meta, ws, { fileNow, shellFileNow, dirNow }, { supplanted }));
 			
@@ -1795,6 +1857,7 @@ export class Executor {
 			
 			if (conf.stale) {
 				this.recallMeter.droppedStale++;
+				staleDropped.add(hash);
 				const reason = conf.flags.includes('file modified') ? 'file changed since ingest — re-read the source'
 					: conf.flags.includes('file deleted') ? 'file deleted since ingest'
 					: conf.flags.includes('other workspace') ? 'other workspace'
@@ -1852,6 +1915,7 @@ export class Executor {
 				stale: conf.stale,
 			});
 		}
+		if (staleDropped.size > 0) this.indexForget(staleDropped);
 		
 		
 		
@@ -1918,13 +1982,15 @@ export class Executor {
 		if (hits.length > 0) {
 			for (const h of hits) {
 				if (h.score !== undefined) {
-					this.calibrationSamples.push({ confidence: h.score / 100, used: false });
+					this.calibrationSamples.push({ confidence: h.score / 100, used: false, hit: false });
 				}
 			}
 			if (this.calibrationSamples.length > 500) {
 				this.calibrationSamples.splice(0, this.calibrationSamples.length - 500);
 			}
 		}
+		if (hits.length === 0) this.fidelityMeter.recallMissed++;
+		else this.fidelityMeter.recallHits++;
 		return { hits, staleHints, total };
 	}
 
@@ -1934,15 +2000,10 @@ export class Executor {
 	markFollowedBy(toolName: string): void {
 		if (this.lastRecallOutcome !== undefined) {
 			const wasFollowedByRead = toolName === 'read_file';
-			this.behavior.recallThenRead += (wasFollowedByRead && this.lastRecallOutcome !== 'hit') ? 1 : 0;
-			
-			
-			
-			if (wasFollowedByRead && this.lastRecallOutcome !== 'hit') {
-				for (let i = this.calibrationSamples.length - 1; i >= 0; i--) {
-					if (this.calibrationSamples[i].used) this.calibrationSamples[i].used = false;
-				}
-			}
+			const wasUseful = this.lastRecallOutcome === 'hit';
+			this.behavior.recallThenRead += (wasFollowedByRead && !wasUseful) ? 1 : 0;
+			const outcome = wasUseful;
+			for (const s of this.calibrationSamples) s.hit = outcome;
 			this.lastRecallOutcome = undefined;
 		}
 	}
@@ -2053,12 +2114,6 @@ export class Executor {
 						this.state.indexRev = diskState.indexRev;
 					}
 				} catch {}
-				for (const [hash] of this.state.blobs) {
-					if (!this.blobContents.has(hash)) {
-						const c = await this.deps.store.readBlob(hash);
-						if (c !== undefined) this.blobContents.set(hash, c);
-					}
-				}
 			});
 			this.lastIndexSync = Date.now();
 		}
@@ -2133,7 +2188,11 @@ export class Executor {
 			this.emit('store', 'info', { action: 'tool-hit', tool: toolName, key: redact(key).text, pattern: matchPattern, candidates, edited: editedCandidates, toolHit: false, hitReason: 'no-blob' });
 			return undefined;
 		}
-		const content = this.blobContents.get(best.hash);
+		let content = this.blobContents.get(best.hash);
+		if (content === undefined) {
+			content = await this.deps.store.readBlob(best.hash);
+			if (content !== undefined) this.blobContents.set(best.hash, content);
+		}
 		if (content === undefined) {
 			this.behavior.readsWithoutPriorRecall++;
 			this.emit('store', 'info', { action: 'tool-hit', tool: toolName, key: redact(key).text, pattern: matchPattern, candidates, edited: editedCandidates, toolHit: false, hitReason: 'no-content' });
@@ -2257,7 +2316,17 @@ export class Executor {
 		if (this.lastCalibChars > 0 && sample.inputTokens > 0) {
 			this.meter = calibrateEstimate(this.meter, { actualChars: this.lastCalibChars, actualTokens: sample.inputTokens });
 		}
-		this.emit('usage', 'info', { action: 'request', ...sample, model: usage.model });
+		const price = usage.model ? this.deps.pricing?.get?.(usage.model) : undefined;
+		if (price) {
+			const cachePerM = price.cacheReadPerM ?? price.inputPerM * 0.1;
+			const freshInput = Math.max(0, sample.inputTokens - sample.cacheRead);
+			const costUsd = (freshInput / 1e6) * price.inputPerM
+				+ (sample.outputTokens / 1e6) * price.outputPerM
+				+ (sample.cacheRead / 1e6) * cachePerM;
+			this.emit('usage', 'info', { action: 'request', ...sample, model: usage.model, costUsd: Number(costUsd.toFixed(6)) });
+		} else {
+			this.emit('usage', 'info', { action: 'request', ...sample, model: usage.model });
+		}
 	}
 
 	
@@ -2429,7 +2498,9 @@ export class Executor {
 			fidelityMeter: { ...this.fidelityMeter },
 			deltaMeter: { ...this.deltaMeter },
 			maskMeter: { ...this.maskMeter },
+			commitmentsMeter: { ...this.commitmentsMeter, samples: this.commitmentsMeter.samples.slice(-20) },
 			playbook: this.playbook.entries,
+			rev: this.rev,
 		});
 	}
 
@@ -2445,61 +2516,42 @@ export class Executor {
 		this.playbookDirty = true;
 	}
 
-	private async enforceStoreCap(): Promise<Set<string>> {
-		const evicted = new Set<string>();
-		const capBytes = this.config.maxStoreBytes;
-		const capBlobs = this.config.maxStoreBlobs;
-		if (capBytes <= 0 && capBlobs <= 0) return evicted;
-		let totalBytes = 0;
-		for (const meta of this.state.blobs.values()) totalBytes += meta.size;
-		const over = () => (capBytes > 0 && totalBytes > capBytes) || (capBlobs > 0 && this.state.blobs.size > capBlobs);
-		if (!over()) return evicted;
-		const active = this.deps.registry.activeSessions();
-		const candidates = [...this.state.blobs.values()]
-			.filter(m => !active.has(m.session))
-			.sort((a, b) => (a.lastRef || a.createdAt) - (b.lastRef || b.createdAt));
-		for (const meta of candidates) {
-			if (!over()) break;
-			totalBytes -= meta.size;
-			evicted.add(meta.hash);
-			this.state.blobs.delete(meta.hash);
-			this.blobContents.delete(meta.hash);
-			try { await this.deps.store.deleteBlob(meta.hash); } catch {}
-		}
-		if (evicted.size > 0) this.state.indexRev += 1;
-		return evicted;
+	noteElideSaved(chars: number): void {
+		this.sessionElideChars += Math.max(0, chars);
 	}
 
 	async runGc(force = false): Promise<{ removed: number; remaining: number }> {
 		this.deps.registry.heartbeat(this.sessionId);
+		const removedHashes = new Set<string>();
+		for (const [hash] of [...this.state.blobs]) {
+			if (await this.deps.store.hasBlob(hash)) continue;
+			removedHashes.add(hash);
+			this.state.blobs.delete(hash);
+			this.blobContents.delete(hash);
+		}
 		const before = new Set(this.state.blobs.keys());
-		const res = gcStore(this.state, {
+		evictOverCap(this.state, {
 			minAgeMs: force ? 0 : this.config.gcMinBlobAgeMs,
 			activeSessions: this.deps.registry.activeSessions(),
+			capBytes: this.config.maxStoreBytes,
+			capBlobs: this.config.maxStoreBlobs,
 		});
-		const removedHashes = new Set<string>();
 		for (const hash of before) {
 			if (!this.state.blobs.has(hash)) {
 				removedHashes.add(hash);
 				this.blobContents.delete(hash);
-			}
-		}
-		const evicted = await this.enforceStoreCap();
-		for (const h of evicted) removedHashes.add(h);
-		for (const [hash] of this.state.blobs) {
-			if (!this.blobContents.has(hash)) {
-				const c = await this.deps.store.readBlob(hash);
-				if (c !== undefined) this.blobContents.set(hash, c);
+				try { await this.deps.store.deleteBlob(hash); } catch (e) {
+					this.emit('store', 'warn', { action: 'gc-delete-failed', hash: hash.slice(0, this.config.hashPrefixChars), error: String(e) });
+				}
 			}
 		}
 		if (removedHashes.size > 0) this.indexForget(removedHashes);
 		await this.maybeCheckpoint(true);
-		if (res.removed > 0) {
-			this.emit('store', 'info', { action: 'gc', removed: res.removed, remaining: this.state.blobs.size });
-			this.deps.host?.notify?.(this.i18n.t('notify.gcDone', { n: res.removed }));
+		if (removedHashes.size > 0) {
+			this.emit('store', 'info', { action: 'gc', removed: removedHashes.size, remaining: this.state.blobs.size, trigger: force ? 'forced' : 'caps' });
+			this.deps.host?.notify?.(this.i18n.t('notify.gcDone', { n: removedHashes.size }));
 		}
-		if (evicted.size > 0) this.emit('store', 'info', { action: 'evict', blobs: evicted.size });
-		return { removed: res.removed + evicted.size, remaining: this.state.blobs.size };
+		return { removed: removedHashes.size, remaining: this.state.blobs.size };
 	}
 
 	
@@ -2565,6 +2617,9 @@ export class Executor {
 			ruleSaves: this.ruleSaves,
 			overheadTokens: this.overheadTokens,
 			recallInjectedTokens: Math.round(this.recallInjectedChars / this.config.estimateCharsPerToken),
+			maskSavedTokens: this.sessionMaskChars / this.config.estimateCharsPerToken,
+			deltaSavedTokens: this.sessionDeltaChars / this.config.estimateCharsPerToken,
+			elideSavedTokens: this.sessionElideChars / this.config.estimateCharsPerToken,
 			recalls: this.snapshot.recalls,
 			reReads: this.reReads,
 			errors: this.errors,
@@ -2689,7 +2744,7 @@ export class Executor {
 	}
 
 	systemHint(): string {
-		return 'DeepSkrin store: deepshrink_recall(query) and deepshrink_symbol(name) are available as optional tools to look up cached results.';
+		return 'DeepShrink store: deepshrink_recall(query) and deepshrink_symbol(name) are available as optional tools to look up cached results.';
 	}
 
 	
@@ -2749,12 +2804,14 @@ export class Executor {
 			: { ece: 0, totalSamples: this.calibrationSamples.length };
 		const lines = [
 			`break-even: ${s.breakEvenPositive ? flexoki.green('POSITIVE') : flexoki.red('NEGATIVE')} (${Math.round(s.netGainTokens)} tokens)`,
-			`  saved: ${Math.round(s.savedTokens)} · overhead: ${Math.round(s.overheadTokens)} · recall re-injected: ${Math.round(this.recallInjectedChars / this.config.estimateCharsPerToken)}`,
+			`  saved: ${Math.round(s.savedTokens)} (digest ${Math.round(this.ruleSaves)} · mask ${Math.round(this.sessionMaskChars / this.config.estimateCharsPerToken)} · delta ${Math.round(this.sessionDeltaChars / this.config.estimateCharsPerToken)} · elide ${Math.round(this.sessionElideChars / this.config.estimateCharsPerToken)})`,
+			`  overhead: ${Math.round(s.overheadTokens)} · recall re-injected: ${Math.round(this.recallInjectedChars / this.config.estimateCharsPerToken)}`,
 			`cache-hit ratio: ${s.cacheHitRatio === null ? 'n/a (no usage yet)' : (s.cacheHitRatio * 100).toFixed(1) + '%'}`,
 			`re-read: ${(s.reReadRate * 100).toFixed(1)}% · errors: ${(s.errorRate * 100).toFixed(1)}%`,
 			`reads without prior recall: ${s.readsWithoutPriorRecall} · after stale/miss recall: ${s.recallThenRead}`,
 			`superseded: ${s.supersededByEdit} edited · ${s.supersededReIngest} same-hash re-ingest`,
 			`frozen-rewrite refusals (LCP guard): ${this.fidelityMeter.frozenRewriteRefusals}`,
+			`commitments: ${this.commitmentsMeter.atoms > 0 ? ((this.commitmentsMeter.preserved / this.commitmentsMeter.atoms) * 100).toFixed(2) : '100.00'}% preserved (${this.commitmentsMeter.atoms} atoms · ${this.commitmentsMeter.missed} missed · ${this.commitmentsMeter.checks} checks)`,
 			`recall calibration (ECE, ${eceResult.totalSamples} samples): ${(eceResult.ece * 100).toFixed(1)}%`,
 			``,
 			`tokens in: ${s.totalInputTokens} · out: ${s.totalOutputTokens} · cache read: ${s.totalCacheRead}`,
@@ -2835,7 +2892,7 @@ export class Executor {
 			.filter(n => /^[A-Za-z0-9_.-]+$/.test(n))
 			.slice(0, 4);
 		const namesNote = names.length > 0 ? ` (e.g. ${names.join(', ')})` : '';
-		return `DeepSkrin store: ${blobs.length} saved tool outputs from previous sessions in this workspace (${Math.round(bytes / 1024)} KB — ${sources})${namesNote}. The optional deepshrink_recall tool can search this cache for a specific repeated lookup.`;
+		return `DeepShrink store: ${blobs.length} saved tool outputs from previous sessions in this workspace (${Math.round(bytes / 1024)} KB — ${sources})${namesNote}. The optional deepshrink_recall tool can search this cache for a specific repeated lookup.`;
 	}
 
 	async cmdLogs(): Promise<string> {
@@ -2919,7 +2976,7 @@ export class Executor {
 		this.emit('config', 'info', { action: 'save' });
 	}
 
-	async setConfig(patch: Partial<DeepSkrinConfig>): Promise<void> {
+	async setConfig(patch: Partial<DeepShrinkConfig>): Promise<void> {
 		this.config = mergeConfig({ ...this.config, ...patch });
 		this.i18n = makeI18n(this.config.locale);
 		await this.saveConfig();
@@ -3040,7 +3097,7 @@ export class Executor {
 		const ratio = num(s.compressTargetRatio);
 		if (ratio !== undefined && ratio >= 0.4 && ratio <= 0.9) next.compressTargetRatio = ratio;
 		if (typeof s.language === 'string' && ['auto', 'fr', 'en', 'es', 'de'].includes(s.language)) {
-			next.language = s.language as DeepSkrinConfig['language'];
+			next.language = s.language as DeepShrinkConfig['language'];
 		}
 		if (typeof s.compactGuard === 'boolean') next.compactGuard = s.compactGuard;
 		if (typeof s.viewEnabled === 'boolean') next.viewEnabled = s.viewEnabled;
@@ -3048,7 +3105,7 @@ export class Executor {
 		if (typeof s.digestEnabled === 'boolean') next.digestEnabled = s.digestEnabled;
 		if (typeof s.elideWindowedReads === 'boolean') next.elideWindowedReads = s.elideWindowedReads;
 		if (typeof s.logLevel === 'string' && ['debug', 'info', 'warn'].includes(s.logLevel)) {
-			next.logLevel = s.logLevel as DeepSkrinConfig['logLevel'];
+			next.logLevel = s.logLevel as DeepShrinkConfig['logLevel'];
 		}
 		if (JSON.stringify(next) !== JSON.stringify(this.config)) {
 			this.config = next;
@@ -3113,7 +3170,7 @@ function scoreRelevanceHits(hits: Array<{ content: string }>, query: string, idf
 	return map;
 }
 
-export function estimateCharsPerTokenHint(config: DeepSkrinConfig): number {
+export function estimateCharsPerTokenHint(config: DeepShrinkConfig): number {
 	return config.estimateCharsPerToken;
 }
 

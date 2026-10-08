@@ -13,7 +13,7 @@
 
   <rect width="1600" height="900" fill="#141312"/>
 
-  <text x="800" y="70" fill="#CECDC3" font-size="26" font-weight="600" letter-spacing="0.02em" text-anchor="middle">DeepSkrin &#8212; architecture</text>
+  <text x="800" y="70" fill="#CECDC3" font-size="26" font-weight="600" letter-spacing="0.02em" text-anchor="middle">DeepShrink &#8212; architecture</text>
   <text x="800" y="98" fill="#878580" font-size="13" text-anchor="middle">tool outputs are cached once, re-served with proof, compressed without loss</text>
 
   <g>

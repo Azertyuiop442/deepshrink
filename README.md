@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="assets/Title.png" alt="DeepSkrin" width="100%"/>
+  <img src="assets/Title.png" alt="DeepShrink" width="100%"/>
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://shieldcn.dev/badge/deepshrink-v1.1.0-24837b.svg?variant=outline" alt="DeepSkrin v1.1.0"/></a>
+  <a href="LICENSE"><img src="https://shieldcn.dev/badge/deepshrink-v1.1.0-24837b.svg?variant=outline" alt="DeepShrink v1.1.0"/></a>
   <a href="LICENSE"><img src="https://shieldcn.dev/badge/license-AGPL--3.0-d14d41.svg?variant=outline" alt="License"/></a>
   <img src="https://shieldcn.dev/badge/savings-up--to-90%25-879a39.svg?variant=outline" alt="Token savings"/>
   <img src="https://shieldcn.dev/badge/runtime-100%25_local-8b7ec8.svg?variant=outline" alt="Local"/>
@@ -11,7 +11,7 @@
 
 > **"Compression never changes the meaning."**
 
-DeepSkrin is a context-compression engine for coding agents. Tool outputs (file reads,
+DeepShrink is a context-compression engine for coding agents. Tool outputs (file reads,
 greps, commands) are cached in a content-addressable store and re-served with proof
 they are still valid. Savings on tool-output tokens: ~80% on the bundled realistic mix
 (-91% on API JSON, -29% on git status) - reproduce it with `node bench/run.mjs`.
@@ -36,7 +36,7 @@ modes, all observed in the wild:
 3. The compression itself inverts meaning: dropping "not" saves 1 token and inverts the
    instruction. The resulting repair loop costs more than the token saved.
 
-DeepSkrin addresses each one structurally, not statistically.
+DeepShrink addresses each one structurally, not statistically.
 
 ---
 
@@ -50,7 +50,7 @@ the table:
 | Prompt caching (provider API) | Reuses the already-billed prefix within the same session | Does not reduce volume: the model still re-reads everything in context. Useless cross-session. |
 | Anti-reread hooks (tutorials) | Intercepts a previously-seen read, returns a short stub | Exact-key cache without freshness proof. No persistent store, no recall, no metrics. |
 | Persistent agent memories | Multi-layer memory for reasoning | Not a tool-output cache. No staleness detection, no elision, no fidelity guarantee. |
-| Context compaction | Summarizes history when context overflows | Destructive: the original tool output is gone. DeepSkrin is lossless (everything stays recallable) and acts before compaction. |
+| Context compaction | Summarizes history when context overflows | Destructive: the original tool output is gone. DeepShrink is lossless (everything stays recallable) and acts before compaction. |
 | Model handoff (prewalk) | Frontier model plans, cheap model executes | Moves reads to a cheaper model, does not eliminate them. Orthogonal: the two combine. |
 
 Full write-up in [DIFFERENTIATION.md](./DIFFERENTIATION.md).
@@ -60,7 +60,7 @@ Full write-up in [DIFFERENTIATION.md](./DIFFERENTIATION.md).
 ## Architecture
 
 <p align="center">
-  <img src="assets/architecture.svg" alt="DeepSkrin architecture" width="100%"/>
+  <img src="assets/architecture.svg" alt="DeepShrink architecture" width="100%"/>
 </p>
 
 Tool outputs enter through the host's hooks. `afterToolCall` ingests each output into
@@ -80,7 +80,7 @@ gain (savings minus injected overhead) in `/deepshrink stats`.
 | Meaning never changes | Negation words (`ne/pas/jamais/not/never/nicht/kein...`) are structurally impossible to drop, and errors are never hidden. When large texts are crushed, URLs, dates, versions, hashes, amounts (units/currency) and identifiers are force-kept whatever the token cost - the full text stays recallable. |
 | Freshness is proven | `read_file` blobs are re-verified by mtime + size at serve time. Identical: serve. Different: score drops by 60 and the blob is never served as content. Web and git results get their own volatility policies and time decay. |
 | Stale content is never served | A blob below the stale threshold (score < 40) returns as a hint (reference + reason, no content). Tool elision (`beforeToolCall`) lets the real tool run. |
-| Zero information loss | Every tool output is stored in full (sha256 content-addressable store) and recoverable via `deepshrink_recall` with a confidence score. The store is bounded (256 MB / 40k blobs by default, configurable): beyond the cap the oldest non-active blobs are evicted from disk. |
+| Zero information loss | Every tool output is stored in full (sha256 content-addressable store) and recoverable via `deepshrink_recall` with a confidence score. The store persists across sessions and is bounded (48 MB / 9k blobs by default, configurable): the oldest non-active blobs are evicted only when a cap is exceeded, with a 30-minute freshness floor (a forced GC ignores it). |
 | Measured, not assumed | Every compression must produce a strictly smaller output, and a tool elision ships only when the replacement (reference + served slice) is smaller than the content it replaces - otherwise the tool runs for real. The chars-per-token estimator self-calibrates on real API usage events (OLS fit, ASCII and CJK priced separately). |
 | Multi-language | English, French, Spanish, German, accent-normalized (`décision` = `decision`), selectable in the config (`language`). |
 | 100% local runtime, zero dependencies | Pure TypeScript. No binaries, no ML libraries, no telemetry. The only outbound request refreshes the public model-pricing grid (used to price tokens and report net gains) - no content ever leaves your machine. |
@@ -181,7 +181,8 @@ increments; a blob is stub-eligible only if re-served since the last boundary
 (`servedSinceEpoch[hash] === epoch`, LRU ~256). The first re-read after compaction is
 always served for real (~24K fidelity budget, bypassing the 2 KB recall budget), then
 elision resumes. Telemetry: `fidelityServes`, `stubServes`, `postCompactionStubs`
-(must stay ~0), `recallCalls` in `metrics.json` and `/deepshrink status`.
+(unsafe stubs after a compaction - the guard makes them structurally impossible, so it
+must stay 0), `recallCalls` in `metrics.json` and `/deepshrink status`.
 Bootstrap note: numeric-only (~400 chars, filename allowlist, no raw content), injected
 once per session via `appendCustomMessageEntry`. `compactGuard` is ON by default.
 Shrink detection: the same epoch guard also arms deterministically when the incoming
