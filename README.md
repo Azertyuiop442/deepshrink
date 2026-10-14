@@ -132,8 +132,10 @@ Reproduce them: `node bench/run.mjs` - bundled corpus, real pipeline, no network
 Official install (user scope - loads on every session):
 
 ```bash
-cmd mods add Azertyuiop442/deepshrink -g
+cmd mods add deepshrink -g
 ```
+
+Alternative source (same package, straight from GitHub): `cmd mods add Azertyuiop442/deepshrink -g`.
 
 Restart your Command Code session, then verify with `/deepshrink status`.
 
