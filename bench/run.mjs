@@ -64,7 +64,7 @@ function buildCorpus() {
 }
 
 export async function runBench() {
-	const dir = mkdtempSync(join(tmpdir(), "deepskrin-bench-"));
+	const dir = mkdtempSync(join(tmpdir(), "deepshrink-bench-"));
 	try {
 		const exec = new Executor(
 			{

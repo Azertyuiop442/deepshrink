@@ -3,7 +3,27 @@
   "version": "1.1.0",
   "description": "DeepShrink - content-addressable context store, recall tool, and compaction guard for Command Code",
   "type": "module",
-  "private": true,
+  "license": "AGPL-3.0-only",
+  "author": "Azertyuiop442",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Azertyuiop442/deepshrink.git"
+  },
+  "keywords": [
+    "command-code",
+    "mod",
+    "context",
+    "compression",
+    "recall",
+    "agent"
+  ],
+  "files": [
+    "core",
+    "runtime",
+    "entry",
+    "harness.d.ts",
+    "scripts/mcp-server.mjs"
+  ],
   "commandcode": {
     "mods": [
       "./entry/index.ts"

@@ -129,6 +129,16 @@ Reproduce them: `node bench/run.mjs` - bundled corpus, real pipeline, no network
 
 ## Install
 
+Official install (user scope - loads on every session):
+
+```bash
+cmd mods add Azertyuiop442/deepshrink -g
+```
+
+Restart your Command Code session, then verify with `/deepshrink status`.
+
+Manual fallback:
+
 ```bash
 # macOS / Linux
 git clone https://github.com/Azertyuiop442/deepshrink.git
@@ -145,8 +155,22 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 The installer copies only the runtime files (`core/`, `runtime/`, `entry/`,
 `package.json`) into `~/.commandcode/mods/deepshrink`. Assets, tests and docs stay out
-of your machine: they are useless at runtime. Restart your Command Code session, then
-verify with `/deepshrink status`.
+of your machine: they are useless at runtime.
+
+### Use with Claude Code, Cursor, or any MCP client
+
+The same local store is served over MCP (stdio, read-only) by
+`scripts/mcp-server.mjs`: recall and symbol tools with the same freshness proof
+(stale files are never served as content, only reported).
+
+```bash
+claude mcp add deepshrink node /path/to/deepshrink/scripts/mcp-server.mjs
+```
+
+Environment variables:
+
+- `DEEPSHRINK_DATA_DIR` - store directory (default: `~/.deepshrink` if it exists, else the mod's `data/deepshrink` folder).
+- `DEEPSHRINK_WORKSPACE` - workspace used to filter stored entries (default: current directory).
 
 ---
 

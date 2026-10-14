@@ -2935,7 +2935,7 @@ export class Executor {
 
 	async cmdHelp(): Promise<string> {
 		return [
-			'DEEPSKRIN — content-addressable context store',
+			'DEEPSHRINK - content-addressable context store',
 			'',
 			'COMMANDS',
 			'  /deepshrink            master menu',

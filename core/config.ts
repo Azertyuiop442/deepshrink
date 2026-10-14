@@ -67,8 +67,6 @@ export interface DeepShrinkConfig {
 	playbookMaxEntries: number;
 }
 
-export type DeepSkrinConfig = DeepShrinkConfig;
-
 export const DEFAULT_CONFIG: DeepShrinkConfig = {
 	enabled: false, 
 	locale: 'en',

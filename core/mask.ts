@@ -69,7 +69,7 @@ export const EMPTY_MASK_METER: MaskMeter = {
 };
 
 const ERROR_RE = /(^|\n)\s*(error|Error|ERROR|ERR_|FAIL|FAILED|Failed|failed|✗|×|not ok|Traceback|panic|Exception|cannot |could not )/;
-const PLACEHOLDER_PREFIX = '[deepskrin] old tool output elided';
+const PLACEHOLDER_PREFIX = '[deepshrink] old tool output elided';
 
 export function isMaskPlaceholder(text: string): boolean {
 	return text.startsWith(PLACEHOLDER_PREFIX);

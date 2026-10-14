@@ -514,17 +514,17 @@ export default function deepshrinkMod(cmd: ModApi): void {
 			const rest = args.trim().slice(action.length).trim();
 			const dash = isDashboardLive();
 			switch (action) {
-				case 'status': return pushInfoModal('DEEPSKRIN STATUS', await executor.cmdStatus(), dash);
-				case 'stats': return pushInfoModal('DEEPSKRIN STATS', await executor.cmdStats(), dash);
-				case 'playbook': return pushInfoModal('DEEPSKRIN PLAYBOOK', await executor.cmdPlaybook(rest), dash);
-				case 'recall': return pushInfoModal('DEEPSKRIN RECALL', await executor.cmdRecall(rest), dash);
-				case 'store': return pushInfoModal('DEEPSKRIN STORE', await executor.cmdStore(), dash);
-				case 'logs': return pushInfoModal('DEEPSKRIN LOG', await executor.cmdLogs(), dash);
+				case 'status': return pushInfoModal('DEEPSHRINK STATUS', await executor.cmdStatus(), dash);
+				case 'stats': return pushInfoModal('DEEPSHRINK STATS', await executor.cmdStats(), dash);
+				case 'playbook': return pushInfoModal('DEEPSHRINK PLAYBOOK', await executor.cmdPlaybook(rest), dash);
+				case 'recall': return pushInfoModal('DEEPSHRINK RECALL', await executor.cmdRecall(rest), dash);
+				case 'store': return pushInfoModal('DEEPSHRINK STORE', await executor.cmdStore(), dash);
+				case 'logs': return pushInfoModal('DEEPSHRINK LOG', await executor.cmdLogs(), dash);
 				case 'config': return pushConfigModal(dash, executor);
-				case 'help': return pushInfoModal('DEEPSKRIN HELP', await executor.cmdHelp(), dash);
+				case 'help': return pushInfoModal('DEEPSHRINK HELP', await executor.cmdHelp(), dash);
 				case 'gc': {
 					const res = await executor.runGc(true);
-					return pushInfoModal('DEEPSKRIN GC', `removed ${res.removed} blobs · remaining ${res.remaining}`, dash);
+					return pushInfoModal('DEEPSHRINK GC', `removed ${res.removed} blobs · remaining ${res.remaining}`, dash);
 				}
 				case 'clean': {
 					
@@ -547,14 +547,14 @@ export default function deepshrinkMod(cmd: ModApi): void {
 						return { message: undefined };
 					}
 					const res = await executor.purgeStore();
-					return { message: panel('DEEPSKRIN CLEAN', `${res.blobs} blobs · ${res.events} events purgés`) };
+					return { message: panel('DEEPSHRINK CLEAN', `${res.blobs} blobs · ${res.events} events purgés`) };
 				}
 				case 'on':
 				case 'off': {
 					
 					const target = action === 'on';
 					await executor.setEnabled(target);
-					return pushInfoModal('DEEPSKRIN', `DeepShrink ${target ? 'ON' : 'OFF'}`, dash);
+					return pushInfoModal('DEEPSHRINK', `DeepShrink ${target ? 'ON' : 'OFF'}`, dash);
 				}
 				default: {
 					
@@ -563,7 +563,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 						return { message: undefined };
 					}
 					const out = await runMainMenu(executor, host);
-					return { message: panel('DEEPSKRIN', out) };
+					return { message: panel('DEEPSHRINK', out) };
 				}
 			}
 		},
@@ -580,38 +580,38 @@ export default function deepshrinkMod(cmd: ModApi): void {
 			switch (sub) {
 				case 'tail': {
 					const n = parseInt(rest[0] ?? '20', 10);
-					return modal('DEEPSKRIN LOG TAIL', await executor.logTail(isNaN(n) ? 20 : n));
+					return modal('DEEPSHRINK LOG TAIL', await executor.logTail(isNaN(n) ? 20 : n));
 				}
 				case 'all':
-					return modal('DEEPSKRIN LOG ALL', await executor.logTail(10000));
+					return modal('DEEPSHRINK LOG ALL', await executor.logTail(10000));
 				case 'level': {
 					const lvl = (rest[0] ?? 'info') as LogLevel;
 					await executor.logSetLevel(lvl);
-					return modal('DEEPSKRIN LOG LEVEL', `level → ${lvl}`);
+					return modal('DEEPSHRINK LOG LEVEL', `level → ${lvl}`);
 				}
 				case 'open': {
 					await cmd.exec({ command: 'open', args: [dir] });
-					return modal('DEEPSKRIN LOG', 'opened log folder');
+					return modal('DEEPSHRINK LOG', 'opened log folder');
 				}
 				case 'stats': {
-					return modal('DEEPSKRIN LOG STATS', await executor.logStats());
+					return modal('DEEPSHRINK LOG STATS', await executor.logStats());
 				}
 				case 'prune': {
 					const days = parseInt(rest[0] ?? '7', 10);
 					const removed = await executor.logPrune(isNaN(days) ? 7 : days);
-					return modal('DEEPSKRIN LOG PRUNE', `removed ${removed} files`);
+					return modal('DEEPSHRINK LOG PRUNE', `removed ${removed} files`);
 				}
 				case 'clean': {
 					const removed = await executor.logClean();
-					return modal('DEEPSKRIN LOG CLEAN', `removed ${removed} entries`);
+					return modal('DEEPSHRINK LOG CLEAN', `removed ${removed} entries`);
 				}
 				case 'export': {
 					const outPath = rest[0] ?? `${dir}/export-${new Date().toISOString().slice(0, 10)}.json`;
 					const res = await executor.exportBundle(outPath);
-					return modal('DEEPSKRIN EXPORT', `${res.path}\n${res.entries} events · ${res.blobs} blobs · ${res.redacted ? 'redacted' : 'unredacted'}`);
+					return modal('DEEPSHRINK EXPORT', `${res.path}\n${res.entries} events · ${res.blobs} blobs · ${res.redacted ? 'redacted' : 'unredacted'}`);
 				}
 				default:
-					return modal('DEEPSKRIN LOG', await executor.cmdLogs());
+					return modal('DEEPSHRINK LOG', await executor.cmdLogs());
 			}
 		},
 	});
@@ -621,7 +621,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 		description: 'Toggle DeepShrink on/off',
 		handler: async () => {
 			const on = await executor.toggle();
-			return { message: panel('DEEPSKRIN TOGGLE', badge(on)) };
+			return { message: panel('DEEPSHRINK TOGGLE', badge(on)) };
 		},
 	});
 
@@ -632,20 +632,20 @@ export default function deepshrinkMod(cmd: ModApi): void {
 		handler: async ({ args }) => {
 			const parts = args.trim().split(/\s+/).filter(Boolean);
 			if (parts.length === 0) {
-				return { message: panel('DEEPSKRIN MASK PAR MODELE', `${await executor.listMaskPerModel()}\n\nusage: /deepshrink-mask-model <modele> <auto|on|off|1-100>` ) };
+				return { message: panel('DEEPSHRINK MASK PAR MODELE', `${await executor.listMaskPerModel()}\n\nusage: /deepshrink-mask-model <modele> <auto|on|off|1-100>` ) };
 			}
 			const [model, value] = parts;
 			if (!value) {
-				return { message: panel('DEEPSKRIN MASK PAR MODELE', await executor.describeMaskForModel(model)) };
+				return { message: panel('DEEPSHRINK MASK PAR MODELE', await executor.describeMaskForModel(model)) };
 			}
-			return { message: panel('DEEPSKRIN MASK PAR MODELE', await executor.setMaskForModel(model, value)) };
+			return { message: panel('DEEPSHRINK MASK PAR MODELE', await executor.setMaskForModel(model, value)) };
 		},
 	});
 
 	cmd.addCommand({
 		name: 'deepshrink-help',
 		description: 'DeepShrink help',
-		handler: async () => ({ message: panel('DEEPSKRIN HELP', await executor.cmdHelp()) }),
+		handler: async () => ({ message: panel('DEEPSHRINK HELP', await executor.cmdHelp()) }),
 	});
 
 	
@@ -661,7 +661,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 	
 	startPickupWatcher(MOD_ID, (pickup, consume) => {
 		const v = String(pickup.value || '');
-		if (pickup.modal === 'DEEPSKRIN MENU') {
+		if (pickup.modal === 'DEEPSHRINK MENU') {
 			consume();
 			clearModals(MOD_ID);
 			void (async () => {
@@ -697,7 +697,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 					case 'toggle': { const on = await executor.toggle(); body = `DeepShrink ${on ? 'ON' : 'OFF'}`; break; }
 					default: return;
 				}
-				await pushInfoModal('DEEPSKRIN', body, true);
+				await pushInfoModal('DEEPSHRINK', body, true);
 			})();
 		} else if (pickup.modal === 'Confirm — Purge DeepShrink') {
 			consume();
@@ -722,7 +722,7 @@ export default function deepshrinkMod(cmd: ModApi): void {
 						? `${res.blobs} blobs · ${(res as { events?: number }).events ?? 0} events purgés (tout).`
 						: `${res.blobs} blobs purgés (workspace uniquement).`;
 					const status = await executor.cmdStatus();
-					await pushInfoModal('DEEPSKRIN CLEAN', `${purgeMsg}\n\n${status}`, true);
+					await pushInfoModal('DEEPSHRINK CLEAN', `${purgeMsg}\n\n${status}`, true);
 				})();
 			}
 		}
@@ -756,7 +756,7 @@ async function pushInfoModal(title: string, body: string, dash: boolean): Promis
 function pushMenuModal(): void {
 	pushModals(MOD_ID, [{
 		id: 'deepshrink-menu',
-		title: 'DEEPSKRIN MENU',
+		title: 'DEEPSHRINK MENU',
 		pending: true,
 		items: [
 			{ label: '◉ STATUS   · session + store state', value: 'status', detail: 'current state' },
@@ -779,10 +779,10 @@ function pushMenuModal(): void {
 
 
 async function pushConfigModal(dash: boolean, executor: Executor): Promise<{ message?: string }> {
-	if (!dash) return { message: panel('DEEPSKRIN CONFIG', await executor.cmdConfig()) };
+	if (!dash) return { message: panel('DEEPSHRINK CONFIG', await executor.cmdConfig()) };
 	pushModals(MOD_ID, [{
 		id: 'open-config',
-		title: 'DEEPSKRIN CONFIG',
+		title: 'DEEPSHRINK CONFIG',
 		pending: true,
 		items: [],
 		actions: [],

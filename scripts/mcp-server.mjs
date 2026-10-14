@@ -18,7 +18,7 @@ const FULL_CHARS = 24000;
 const SERVER_VERSION = "1.0.0";
 
 function log(msg) {
-	process.stderr.write(`[deepskrin-mcp] ${msg}\n`);
+	process.stderr.write(`[deepshrink-mcp] ${msg}\n`);
 }
 
 function readJson(path) {
@@ -189,7 +189,7 @@ function handle(msg) {
 		respond(id, {
 			protocolVersion: typeof msg.params?.protocolVersion === "string" ? msg.params.protocolVersion : "2024-11-05",
 			capabilities: { tools: {} },
-			serverInfo: { name: "deepskrin-store", version: SERVER_VERSION },
+			serverInfo: { name: "deepshrink-store", version: SERVER_VERSION },
 		});
 		return;
 	}

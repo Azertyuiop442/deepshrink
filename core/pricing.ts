@@ -71,7 +71,7 @@ export async function fetchOpenRouterPricing(
 ): Promise<PricingTable | undefined> {
 	try {
 		const res = await fetch('https://openrouter.ai/api/v1/models', {
-			headers: {'User-Agent': 'deepskrin-pricing/1.0'},
+			headers: {'User-Agent': 'deepshrink-pricing/1.0'},
 			signal: AbortSignal.timeout(20_000),
 		});
 		if (!res.ok) return undefined;
@@ -179,7 +179,7 @@ export async function fetchCCPricing(
 ): Promise<PricingTable | undefined> {
 	try {
 		const res = await fetch('https://commandcode.ai/docs/resources/pricing-limits', {
-			headers: {'User-Agent': 'deepskrin-pricing/1.0'},
+			headers: {'User-Agent': 'deepshrink-pricing/1.0'},
 			signal: AbortSignal.timeout(20_000),
 		});
 		if (!res.ok) return undefined;
