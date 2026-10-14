@@ -200,10 +200,11 @@ function isDirScanCommand(cmd: string): boolean {
 
 
 const DIR_SCAN_MAX_ENTRIES = 5000;
-export function dirSignature(p: string): { mtimeMs: number; size: number } | undefined {
+export function dirSignature(p: string): { mtimeMs: number; size: number; ctimeMs: number } | undefined {
 	const st = statSync(p);
 	if (!st.isDirectory()) return undefined;
 	let maxMtime = st.mtimeMs;
+	let maxCtime = st.ctimeMs;
 	let count = 0;
 	const stack = [p];
 	while (stack.length > 0) {
@@ -221,11 +222,12 @@ export function dirSignature(p: string): { mtimeMs: number; size: number } | und
 			try {
 				const s = statSync(full);
 				if (s.mtimeMs > maxMtime) maxMtime = s.mtimeMs;
+				if (s.ctimeMs > maxCtime) maxCtime = s.ctimeMs;
 				if (e.isDirectory()) stack.push(full);
 			} catch {}
 		}
 	}
-	return { mtimeMs: maxMtime, size: count };
+	return { mtimeMs: maxMtime, size: count, ctimeMs: maxCtime };
 }
 
 const CHECKPOINT_MIN_INTERVAL_MS = 5000;
@@ -577,6 +579,7 @@ export class Executor {
 				
 				let fileMtime: number | undefined;
 				let fileSize: number | undefined;
+				let fileCtime: number | undefined;
 				
 				
 				
@@ -587,6 +590,7 @@ export class Executor {
 				
 				let dirMtime: number | undefined;
 				let dirSize: number | undefined;
+				let dirCtime: number | undefined;
 				if (toolName === 'shell_command' && command && isContentReadingCommand(command)) {
 					const refPath = findFilePathInCommand(command);
 					if (refPath) {
@@ -594,6 +598,7 @@ export class Executor {
 							const st = statSync(resolveTildePath(refPath));
 							fileMtime = st.mtimeMs;
 							fileSize = st.size;
+							fileCtime = st.ctimeMs;
 						} catch {}
 					}
 				}
@@ -605,6 +610,7 @@ export class Executor {
 							if (sig) {
 								dirMtime = sig.mtimeMs;
 								dirSize = sig.size;
+								dirCtime = sig.ctimeMs;
 							}
 						} catch {}
 					}
@@ -614,6 +620,7 @@ export class Executor {
 						const st = statSync(path);
 						fileMtime = st.mtimeMs;
 						fileSize = st.size;
+						fileCtime = st.ctimeMs;
 					} catch {}
 				}
 				const ws = this.workspace;
@@ -717,8 +724,10 @@ export class Executor {
 						: undefined,
 					fileMtime,
 					fileSize,
+					fileCtime,
 					dirMtime,
 					dirSize,
+					dirCtime,
 				});
 				ingestedHash = res.hash;
 				if (res.newBlobs > 0) {
@@ -844,7 +853,7 @@ export class Executor {
 		return best;
 	}
 
-	private readRawTextFile(real: string): { text: string; mtimeMs: number; size: number } | undefined {
+	private readRawTextFile(real: string): { text: string; mtimeMs: number; size: number; ctimeMs: number } | undefined {
 		try {
 			const st0 = statSync(real);
 			if (st0.size > this.config.maxFullFileBytes) return undefined;
@@ -866,8 +875,8 @@ export class Executor {
 				text = raw.toString('utf8');
 			}
 			const st1 = statSync(real);
-			if (st1.mtimeMs !== st0.mtimeMs || st1.size !== st0.size) return undefined;
-			return { text, mtimeMs: st1.mtimeMs, size: st1.size };
+			if (st1.mtimeMs !== st0.mtimeMs || st1.size !== st0.size || st1.ctimeMs !== st0.ctimeMs) return undefined;
+			return { text, mtimeMs: st1.mtimeMs, size: st1.size, ctimeMs: st1.ctimeMs };
 		} catch {
 			return undefined;
 		}
@@ -1095,6 +1104,7 @@ export class Executor {
 				filePath: path,
 				fileMtime: read.mtimeMs,
 				fileSize: read.size,
+				fileCtime: read.ctimeMs,
 				fullFile: true,
 				realPath: real,
 			});
@@ -1191,7 +1201,8 @@ export class Executor {
 		try {
 			const st = statSync(real);
 			if (meta.fileMtime !== undefined) {
-				stale = st.mtimeMs !== meta.fileMtime || st.size !== meta.fileSize;
+				stale = st.mtimeMs !== meta.fileMtime || st.size !== meta.fileSize
+					|| meta.fileCtime === undefined || st.ctimeMs !== meta.fileCtime;
 			} else {
 				stale = meta.editedByModel === true;
 			}
@@ -1820,7 +1831,7 @@ export class Executor {
 			if (meta.source === 'read_file' && meta.filePath) {
 				try {
 					const st = statSync(resolveTildePath(meta.filePath));
-					fileNow = { mtimeMs: st.mtimeMs, size: st.size };
+					fileNow = { mtimeMs: st.mtimeMs, size: st.size, ctimeMs: st.ctimeMs };
 				} catch {
 					fileNow = null; 
 				}
@@ -1828,7 +1839,7 @@ export class Executor {
 			if (meta.source === 'shell_command' && meta.filePath && meta.dirMtime === undefined) {
 				try {
 					const st = statSync(resolveTildePath(meta.filePath));
-					shellFileNow = { mtimeMs: st.mtimeMs, size: st.size };
+					shellFileNow = { mtimeMs: st.mtimeMs, size: st.size, ctimeMs: st.ctimeMs };
 				} catch {
 					shellFileNow = null; 
 				}
@@ -1862,6 +1873,8 @@ export class Executor {
 					: conf.flags.includes('file deleted') ? 'file deleted since ingest'
 					: conf.flags.includes('other workspace') ? 'other workspace'
 					: conf.flags.includes('edited by model') ? 'edited by the model — re-read the source'
+					: conf.flags.includes('file metadata changed') ? 'file metadata changed since ingest - re-read the source'
+					: conf.flags.includes('file freshness unverified') ? 'file freshness unverifiable - re-read the source'
 					: conf.flags.join(', ') || 'stale';
 				staleHints.push({ short, ref: `[blob:${short}:${content.length}]`, reason, score: conf.score, flags: conf.flags });
 				continue;
@@ -2222,7 +2235,7 @@ export class Executor {
 		if (toolName === 'read_file' && statPath) {
 			try {
 				const st = statSync(statPath);
-				fileNow = { mtimeMs: st.mtimeMs, size: st.size };
+				fileNow = { mtimeMs: st.mtimeMs, size: st.size, ctimeMs: st.ctimeMs };
 			} catch {
 				fileNow = null; 
 			}
@@ -2230,7 +2243,7 @@ export class Executor {
 		if (toolName === 'shell_command' && meta.filePath && meta.dirMtime === undefined) {
 			try {
 				const st = statSync(resolveTildePath(meta.filePath));
-				shellFileNow = { mtimeMs: st.mtimeMs, size: st.size };
+				shellFileNow = { mtimeMs: st.mtimeMs, size: st.size, ctimeMs: st.ctimeMs };
 			} catch {
 				shellFileNow = null; 
 			}
@@ -2703,8 +2716,13 @@ export class Executor {
 			if (p && c.meta.fileMtime !== undefined && c.meta.fileSize !== undefined) {
 				try {
 					const st = statSync(p);
-					if (st.mtimeMs !== c.meta.fileMtime || st.size !== c.meta.fileSize) {
-						result.stale.push({ ref: `[blob:${c.hash.slice(0, this.config.hashPrefixChars)}]`, path: p, reason: 'file modified - re-read the source' });
+					const statChanged = st.mtimeMs !== c.meta.fileMtime || st.size !== c.meta.fileSize;
+					const ctimeProven = c.meta.fileCtime !== undefined && st.ctimeMs === c.meta.fileCtime;
+					if (statChanged || !ctimeProven) {
+						const reason = statChanged ? 'file modified - re-read the source'
+							: c.meta.fileCtime === undefined ? 'file freshness unverified - re-read the source'
+							: 'file metadata changed - re-read the source';
+						result.stale.push({ ref: `[blob:${c.hash.slice(0, this.config.hashPrefixChars)}]`, path: p, reason });
 						this.playbookStale(p);
 						continue;
 					}

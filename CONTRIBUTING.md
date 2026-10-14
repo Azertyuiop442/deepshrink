@@ -31,7 +31,7 @@ rejected regardless of its other merits:
 
 1. **Fail-open**: any doubt keeps the original. Compression is never allowed to risk
    correctness for savings.
-2. **Stale content is never served as truth**: freshness proofs (mtime + size, source
+2. **Stale content is never served as truth**: freshness proofs (mtime + size + ctime, source
    volatility policies) are load-bearing. Loosening them is a correctness regression.
 3. **Lossless recall**: everything dropped from context must remain recoverable in the
    store.

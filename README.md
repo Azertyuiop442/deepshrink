@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://shieldcn.dev/badge/deepshrink-v1.1.1-24837b.svg?variant=outline" alt="DeepShrink v1.1.1"/></a>
+  <a href="LICENSE"><img src="https://shieldcn.dev/badge/deepshrink-v1.1.2-24837b.svg?variant=outline" alt="DeepShrink v1.1.2"/></a>
   <a href="LICENSE"><img src="https://shieldcn.dev/badge/license-AGPL--3.0-d14d41.svg?variant=outline" alt="License"/></a>
   <img src="https://shieldcn.dev/badge/savings-up--to-90%25-879a39.svg?variant=outline" alt="Token savings"/>
   <img src="https://shieldcn.dev/badge/runtime-100%25_local-8b7ec8.svg?variant=outline" alt="Local"/>
@@ -62,7 +62,7 @@ Full write-up in [DIFFERENTIATION.md](./DIFFERENTIATION.md).
 </p>
 
 Tool outputs enter through the host's hooks. `afterToolCall` ingests each output into
-the content-addressable store with mtime + size provenance. On the next identical
+the content-addressable store with mtime + size + ctime provenance. On the next identical
 `read_file`, `beforeToolCall` asks the confidence scorer: proof still valid means the
 stored content is served and the original command never actually runs (the call is
 rewritten to a no-op); anything stale means the tool re-runs for real. `transformContext`
@@ -76,12 +76,14 @@ gain (savings minus injected overhead) in `/deepshrink stats`.
 | Guarantee | Mechanism |
 |---|---|
 | Meaning never changes | Negation words (`ne/pas/jamais/not/never/nicht/kein...`) are structurally impossible to drop, and errors are never hidden. When large texts are crushed, URLs, dates, versions, hashes, amounts (units/currency) and identifiers are force-kept whatever the token cost - the full text stays recallable. |
-| Freshness is proven | `read_file` blobs are re-verified by mtime + size at serve time. Identical: serve. Different: score drops by 60 and the blob is never served as content. Web and git results get their own volatility policies and time decay. |
+| Freshness is proven | `read_file` blobs are re-verified by mtime + size + ctime at serve time.* Identical: serve. Different: score drops by 60 and the blob is never served as content. Web and git results get their own volatility policies and time decay. |
 | Stale content is never served | A blob below the stale threshold (score < 40) returns as a hint (reference + reason, no content). Tool elision (`beforeToolCall`) lets the real tool run. |
 | Zero information loss | Every tool output is stored in full (sha256 content-addressable store) and recoverable via `deepshrink_recall` with a confidence score. The store persists across sessions and is bounded (48 MB / 9k blobs by default, configurable): the oldest non-active blobs are evicted only when a cap is exceeded, with a 30-minute freshness floor (a forced GC ignores it). |
 | Measured, not assumed | Every compression must produce a strictly smaller output, and a tool elision ships only when the replacement (reference + served slice) is smaller than the content it replaces - otherwise the tool runs for real. The chars-per-token estimator self-calibrates on real API usage events (OLS fit, ASCII and CJK priced separately). |
 | Multi-language | English, French, Spanish, German, accent-normalized (`décision` = `decision`), selectable in the config (`language`). |
 | 100% local runtime, zero dependencies | Pure TypeScript. No binaries, no ML libraries, no telemetry. The only outbound request refreshes the public model-pricing grid (used to price tokens and report net gains) - no content ever leaves your machine. |
+
+\* Part of the freshness proof since v1.1.2: `ctime` is set by the kernel - not settable from userland (`utimes`, `touch -r`).
 
 ---
 
@@ -97,9 +99,10 @@ gain (savings minus injected overhead) in `/deepshrink stats`.
 ## The numbers
 
 Reproduce them: `node bench/run.mjs` - bundled corpus, real pipeline, no network.
+Protocol, per-version before/after tables and reproduction commands: [STATS.md](./STATS.md).
 
 - ~80% average savings on the bundled realistic mix (JSON, grep, logs, git status, large texts, prose).
-- Per category: -91% API JSON, -80% build logs, -89% prose, -89% large texts, -59% grep results, -33% stack traces, -29% git status.
+- Per category: -91% API JSON, -80% build logs, -90% prose, -89% large texts, -59% grep results, -33% stack traces, -29% git status.
 - Your own sessions are metered live: net token gain, cost, re-read rate in `/deepshrink stats`.
 - Every stored byte remains recallable with a confidence score (0-100%) and staleness detection.
 - Recall runs on an in-memory inverted index with code-aware tokenization: multi-term and path
@@ -112,7 +115,7 @@ Reproduce them: `node bench/run.mjs` - bundled corpus, real pipeline, no network
 
 | Episode | What it shows |
 |---|---|
-| Proven Freshness | Every cached blob is re-verified by mtime + size. Stale content is never served. |
+| Proven Freshness | Every cached blob is re-verified by mtime + size + ctime. Stale content is never served. |
 | ![Proven Freshness](./assets/ProvenFreshness.gif) | |
 | Delta Ratio | A changed file is re-served as a Myers-diff patch (≤ 40% changed) instead of the whole file. |
 | ![Delta Ratio](./assets/DeltaRatio.gif) | |
@@ -127,7 +130,7 @@ Reproduce them: `node bench/run.mjs` - bundled corpus, real pipeline, no network
 
 ## Install
 
-Works in Command Code, Claude Code, Cursor, or any MCP client - one local store, several hosts:
+Works in Command Code, Claude Code, Cursor, Antigravity, or any MCP client - one local store, several hosts:
 
 <details>
 <summary><b>Command Code</b> - official install (user scope, loads on every session)</summary>
@@ -176,6 +179,18 @@ Environment variables:
 
 - `DEEPSHRINK_DATA_DIR` - store directory (default: `~/.deepshrink` if it exists, else the mod's `data/deepshrink` folder).
 - `DEEPSHRINK_WORKSPACE` - workspace used to filter stored entries (default: current directory).
+
+<details>
+<summary><b>Antigravity</b> - plugin with agent skill and MCP server</summary>
+
+[`adapters/antigravity/`](./adapters/antigravity) is a self-contained plugin: the
+plugin manifest, the `deepshrink` agent skill, and an MCP server exposing
+`deepshrink_recall` and `deepshrink_symbol` from the same local store, with the
+same freshness proof (stale files are never served as content). Copy the folder
+into your Antigravity plugins directory, or register
+`adapters/antigravity/mcp-server.mjs` as a stdio MCP server.
+
+</details>
 
 ---
 

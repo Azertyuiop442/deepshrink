@@ -25,6 +25,7 @@ export interface BlobMeta {
 	searchPattern?: string; 
 	fileMtime?: number;  
 	fileSize?: number;   
+	fileCtime?: number;
 	
 
 
@@ -33,6 +34,7 @@ export interface BlobMeta {
 
 	dirMtime?: number;
 	dirSize?: number;    
+	dirCtime?: number;
 	editedByModel?: boolean; 
 	
 
@@ -78,7 +80,7 @@ export function ingestContent(
 	config: DeepShrinkConfig,
 	now = Date.now(),
 	bypass = false,
-	provenance: Partial<Pick<BlobMeta, 'workspace' | 'source' | 'command' | 'filePath' | 'searchPattern' | 'fileMtime' | 'fileSize' | 'dirMtime' | 'dirSize' | 'fullFile' | 'realPath'>> = {},
+	provenance: Partial<Pick<BlobMeta, 'workspace' | 'source' | 'command' | 'filePath' | 'searchPattern' | 'fileMtime' | 'fileSize' | 'fileCtime' | 'dirMtime' | 'dirSize' | 'dirCtime' | 'fullFile' | 'realPath'>> = {},
 ): IngestResult {
 	const hash = hashForContent(content);
 	const short = shortHash(content, config.hashPrefixChars);
@@ -100,8 +102,10 @@ export function ingestContent(
 		if (provenance.searchPattern !== undefined) existing.searchPattern = provenance.searchPattern;
 		if (provenance.fileMtime !== undefined) existing.fileMtime = provenance.fileMtime;
 		if (provenance.fileSize !== undefined) existing.fileSize = provenance.fileSize;
+		if (provenance.fileCtime !== undefined) existing.fileCtime = provenance.fileCtime;
 		if (provenance.dirMtime !== undefined) existing.dirMtime = provenance.dirMtime;
 		if (provenance.dirSize !== undefined) existing.dirSize = provenance.dirSize;
+		if (provenance.dirCtime !== undefined) existing.dirCtime = provenance.dirCtime;
 		if (provenance.fullFile !== undefined) existing.fullFile = provenance.fullFile;
 		if (provenance.realPath !== undefined) existing.realPath = provenance.realPath;
 		if (provenance.filePath !== undefined && provenance.fileMtime !== undefined) {
@@ -167,8 +171,10 @@ export function ingestContent(
 		searchPattern: provenance.searchPattern,
 		fileMtime: provenance.fileMtime,
 		fileSize: provenance.fileSize,
+		fileCtime: provenance.fileCtime,
 		dirMtime: provenance.dirMtime,
 		dirSize: provenance.dirSize,
+		dirCtime: provenance.dirCtime,
 		editedByModel: false,
 		fullFile: provenance.fullFile,
 		realPath: provenance.realPath,

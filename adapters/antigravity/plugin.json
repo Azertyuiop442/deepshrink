@@ -1,0 +1,4 @@
+{
+  "name": "deepshrink",
+  "description": "Tool output cache and delta compression. Exposes deepshrink_recall and deepshrink_symbol via MCP to avoid redundant file reads and grep re-runs."
+}

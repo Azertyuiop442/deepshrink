@@ -10,7 +10,7 @@ export interface FreshnessSignals {
 	
 	meta: BlobMeta;
 	
-	fileNow?: { mtimeMs: number; size: number } | null; 
+	fileNow?: { mtimeMs: number; size: number; ctimeMs?: number } | null; 
 	
 	supplanted?: boolean;
 	
@@ -20,7 +20,7 @@ export interface FreshnessSignals {
 	
 
 
-	shellFileNow?: { mtimeMs: number; size: number } | null;
+	shellFileNow?: { mtimeMs: number; size: number; ctimeMs?: number } | null;
 	
 
 
@@ -28,7 +28,7 @@ export interface FreshnessSignals {
 	
 
 
-	dirNow?: { mtimeMs: number; size: number } | null;
+	dirNow?: { mtimeMs: number; size: number; ctimeMs?: number } | null;
 	
 	dirMtime?: number;
 	dirSize?: number;
@@ -37,10 +37,10 @@ export interface FreshnessSignals {
 
 
 export interface FreshnessProvenance {
-	fileNow?: { mtimeMs: number; size: number } | null;
-	shellFileNow?: { mtimeMs: number; size: number } | null;
+	fileNow?: { mtimeMs: number; size: number; ctimeMs?: number } | null;
+	shellFileNow?: { mtimeMs: number; size: number; ctimeMs?: number } | null;
 	shellFileMtime?: number;
-	dirNow?: { mtimeMs: number; size: number } | null;
+	dirNow?: { mtimeMs: number; size: number; ctimeMs?: number } | null;
 }
 
 export interface ConfidenceResult {
@@ -83,12 +83,20 @@ export function scoreConfidence(s: FreshnessSignals): ConfidenceResult {
 			score -= 60;
 			flags.push('file deleted');
 		} else if (meta.fileMtime !== undefined && meta.fileSize !== undefined) {
-			if (s.fileNow.mtimeMs === meta.fileMtime && s.fileNow.size === meta.fileSize) {
-				score += 40;
-				flags.push('file unchanged');
-			} else {
+			const sameStat = s.fileNow.mtimeMs === meta.fileMtime && s.fileNow.size === meta.fileSize;
+			const ctimeBoth = s.fileNow.ctimeMs !== undefined && meta.fileCtime !== undefined;
+			if (!sameStat) {
 				score -= 60;
 				flags.push('file modified');
+			} else if (ctimeBoth && s.fileNow.ctimeMs === meta.fileCtime) {
+				score += 40;
+				flags.push('file unchanged');
+			} else if (ctimeBoth) {
+				score -= 60;
+				flags.push('file metadata changed');
+			} else {
+				score -= 60;
+				flags.push('file freshness unverified');
 			}
 		} else if (s.editedByModel || meta.editedByModel) {
 			score -= 60;
@@ -106,12 +114,20 @@ export function scoreConfidence(s: FreshnessSignals): ConfidenceResult {
 			score -= 60;
 			flags.push('file deleted');
 		} else if (s.shellFileMtime !== undefined) {
-			if (s.shellFileNow.mtimeMs === s.shellFileMtime) {
-				score += 40;
-				flags.push('file unchanged');
-			} else {
+			const sameShellStat = s.shellFileNow.mtimeMs === s.shellFileMtime;
+			const shellCtimeBoth = s.shellFileNow.ctimeMs !== undefined && meta.fileCtime !== undefined;
+			if (!sameShellStat) {
 				score -= 60;
 				flags.push('file modified');
+			} else if (shellCtimeBoth && s.shellFileNow.ctimeMs === meta.fileCtime) {
+				score += 40;
+				flags.push('file unchanged');
+			} else if (shellCtimeBoth) {
+				score -= 60;
+				flags.push('file metadata changed');
+			} else {
+				score -= 60;
+				flags.push('file freshness unverified');
 			}
 		} else if (meta.editedByModel) {
 			score -= 60;
@@ -133,12 +149,20 @@ export function scoreConfidence(s: FreshnessSignals): ConfidenceResult {
 			score -= 60;
 			flags.push('directory deleted');
 		} else if (meta.dirMtime !== undefined && meta.dirSize !== undefined) {
-			if (s.dirNow.mtimeMs === meta.dirMtime && s.dirNow.size === meta.dirSize) {
-				score += 40;
-				flags.push('dir unchanged');
-			} else {
+			const sameDirStat = s.dirNow.mtimeMs === meta.dirMtime && s.dirNow.size === meta.dirSize;
+			const dirCtimeBoth = s.dirNow.ctimeMs !== undefined && meta.dirCtime !== undefined;
+			if (!sameDirStat) {
 				score -= 60;
 				flags.push('dir changed');
+			} else if (dirCtimeBoth && s.dirNow.ctimeMs === meta.dirCtime) {
+				score += 40;
+				flags.push('dir unchanged');
+			} else if (dirCtimeBoth) {
+				score -= 60;
+				flags.push('dir metadata changed');
+			} else {
+				score -= 60;
+				flags.push('dir freshness unverified');
 			}
 		} else {
 			flags.push('command (unverified)');

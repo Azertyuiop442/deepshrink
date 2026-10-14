@@ -23,7 +23,7 @@ faithful compression.
 ## The 5 differentiators none of the above has
 
 1. **Proven freshness, not age heuristics.** Every `read_file` blob is re-verified by
-   mtime + size at serve time. Identical = "file unchanged". Different = score -60 and
+   mtime + size + ctime at serve time. Identical = "file unchanged". Different = score -60 and
    never served. Web and git get their own volatility policies. Stale content is never
    served as truth.
 
@@ -80,7 +80,7 @@ re-reads of modified files cost only their diff:
 1. **Cross-session, not cross-model.** The store persists between sessions. The second
    task on the same repo starts with the first task's reads already paid for. Prewalk
    has no memory beyond its single handoff.
-2. **Proof-carrying reuse.** A cached blob is re-served only if its mtime/size still
+2. **Proof-carrying reuse.** A cached blob is re-served only if its mtime/size/ctime still
    match. Prewalk's context transfer has no freshness notion - if a file changes
    mid-run, the cheap model reasons over stale context with no signal.
 3. **Faithful compression on top.** Prewalk transfers the context verbatim; the token
@@ -98,6 +98,6 @@ re-reads of modified files cost only their diff:
 
 **The two combine.** A prewalk run whose frontier exploration and cheap execution both
 sit on a DeepShrink store pays each unchanged file's read cost once per workspace
-instead of once per run (mtime-verified elision), pays only the Myers diff when a file
+instead of once per run (metadata-verified elision), pays only the Myers diff when a file
 does change, and compresses every read that still happens before it enters context.
 Prewalk optimizes who reads; DeepShrink optimizes whether reading is needed at all.
