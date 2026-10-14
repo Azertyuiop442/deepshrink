@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://shieldcn.dev/badge/deepshrink-v1.1.0-24837b.svg?variant=outline" alt="DeepShrink v1.1.0"/></a>
+  <a href="LICENSE"><img src="https://shieldcn.dev/badge/deepshrink-v1.1.1-24837b.svg?variant=outline" alt="DeepShrink v1.1.1"/></a>
   <a href="LICENSE"><img src="https://shieldcn.dev/badge/license-AGPL--3.0-d14d41.svg?variant=outline" alt="License"/></a>
   <img src="https://shieldcn.dev/badge/savings-up--to-90%25-879a39.svg?variant=outline" alt="Token savings"/>
   <img src="https://shieldcn.dev/badge/runtime-100%25_local-8b7ec8.svg?variant=outline" alt="Local"/>
@@ -19,8 +19,6 @@ they are still valid. Savings on tool-output tokens: ~80% on the bundled realist
 The core constraint: a compressed output must never mean anything different from the
 original. "The hook must not suppress errors" must never become "The hook must suppress
 errors", whatever the token cost of preserving it.
-
----
 
 ---
 
@@ -129,7 +127,10 @@ Reproduce them: `node bench/run.mjs` - bundled corpus, real pipeline, no network
 
 ## Install
 
-Official install (user scope - loads on every session):
+Works in Command Code, Claude Code, Cursor, or any MCP client - one local store, several hosts:
+
+<details>
+<summary><b>Command Code</b> - official install (user scope, loads on every session)</summary>
 
 ```bash
 cmd mods add deepshrink -g
@@ -158,6 +159,8 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 The installer copies only the runtime files (`core/`, `runtime/`, `entry/`,
 `package.json`) into `~/.commandcode/mods/deepshrink`. Assets, tests and docs stay out
 of your machine: they are useless at runtime.
+
+</details>
 
 ### Use with Claude Code, Cursor, or any MCP client
 

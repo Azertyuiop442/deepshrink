@@ -1,7 +1,7 @@
 {
   "name": "deepshrink",
-  "version": "1.1.0",
-  "description": "DeepShrink - content-addressable context store, recall tool, and compaction guard for Command Code",
+  "version": "1.1.1",
+  "description": "Content-addressable context store, recall tool, and compaction guard for AI coding agents",
   "type": "module",
   "license": "AGPL-3.0-only",
   "author": "Azertyuiop442",
